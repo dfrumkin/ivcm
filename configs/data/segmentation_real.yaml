@@ -1,0 +1,10 @@
+# Real segmentation data (used by cross-validate). 5-fold CV over the slices of a single
+# .nii volume pair; `fold` selects the validation block (cross-validate sweeps 0..n-1).
+_target_: ivcm.data.SegmentationCVDataModule
+images_path: ${data_dir}/segmentation/imgs.nii
+masks_path: ${data_dir}/segmentation/mask_gt.nii
+n_folds: 5
+fold: 0
+batch_size: 4
+num_workers: 0
+size: ${image_size}

@@ -1,0 +1,20 @@
+# Real classification data (opt-in: `data=classification_real`). Fixed train/val split
+# from per-class folders under ${data_dir}/classification.
+_target_: ivcm.data.BaseDataModule
+batch_size: 8
+num_workers: 0
+class_names: ${class_names}
+train_dataset:
+  _target_: ivcm.data.ClassificationImageDataset
+  root: ${data_dir}/classification/train
+  class_names: ${class_names}
+  transform:
+    _target_: ivcm.data.transforms.build_d4_transform
+    size: ${image_size}
+val_dataset:
+  _target_: ivcm.data.ClassificationImageDataset
+  root: ${data_dir}/classification/val
+  class_names: ${class_names}
+  transform:
+    _target_: ivcm.data.transforms.build_eval_transform
+    size: ${image_size}

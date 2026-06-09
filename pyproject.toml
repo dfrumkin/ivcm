@@ -14,10 +14,13 @@ dependencies = [
     "torchmetrics",
     "wandb",
     "rich",
+    "nibabel",
+    "pillow",
 ]
 
 [project.scripts]
 train = "ivcm.train:main"
+cross-validate = "ivcm.cv:main"
 
 [build-system]
 requires = ["hatchling"]

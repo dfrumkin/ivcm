@@ -1,7 +1,23 @@
-_target_: ivcm.data.SyntheticSegmentationDataModule
-num_classes: ${num_classes}
-image_size: 384
-train_samples: 64
-val_samples: 32
+# Synthetic segmentation data (default, data-free). BaseDataModule with two synthetic
+# datasets; real segmentation uses the dedicated CV datamodule (data=segmentation_real).
+_target_: ivcm.data.BaseDataModule
 batch_size: 4
 num_workers: 0
+train_dataset:
+  _target_: ivcm.data.SyntheticSegmentationDataset
+  num_samples: 64
+  num_classes: ${len:${class_names}}
+  image_size: ${image_size}
+  seed: 0
+  transform:
+    _target_: ivcm.data.transforms.build_d4_transform
+    size: ${image_size}
+val_dataset:
+  _target_: ivcm.data.SyntheticSegmentationDataset
+  num_samples: 32
+  num_classes: ${len:${class_names}}
+  image_size: ${image_size}
+  seed: 10000
+  transform:
+    _target_: ivcm.data.transforms.build_eval_transform
+    size: ${image_size}

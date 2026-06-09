@@ -1,7 +1,24 @@
-_target_: ivcm.data.SyntheticClassificationDataModule
-num_classes: ${num_classes}
-image_size: 384
-train_samples: 64
-val_samples: 32
+# Synthetic classification data (default, data-free). BaseDataModule holds two datasets;
+# the dataset generates at ${image_size} so smoke runs stay small.
+_target_: ivcm.data.BaseDataModule
 batch_size: 8
 num_workers: 0
+class_names: ${class_names}
+train_dataset:
+  _target_: ivcm.data.SyntheticClassificationDataset
+  num_samples: 64
+  num_classes: ${len:${class_names}}
+  image_size: ${image_size}
+  seed: 0
+  transform:
+    _target_: ivcm.data.transforms.build_d4_transform
+    size: ${image_size}
+val_dataset:
+  _target_: ivcm.data.SyntheticClassificationDataset
+  num_samples: 32
+  num_classes: ${len:${class_names}}
+  image_size: ${image_size}
+  seed: 10000
+  transform:
+    _target_: ivcm.data.transforms.build_eval_transform
+    size: ${image_size}

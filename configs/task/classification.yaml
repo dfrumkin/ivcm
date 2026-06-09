@@ -7,3 +7,7 @@ defaults:
   - /loss: cross_entropy
   - /optimizer: adamw
   - /scheduler: cosine
+
+# Single source of truth for the classes; the class count is derived as
+# ${len:${class_names}}. Order fixes the per-class metric indices.
+class_names: [endothelium, epithelium, nerves, stroma]

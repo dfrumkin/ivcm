@@ -1,8 +1,8 @@
 _target_: ivcm.models.SegmentationModule
-num_classes: ${num_classes}
+num_classes: ${len:${class_names}}
 net:
   _target_: segmentation_models_pytorch.Unet
   encoder_name: resnet18
   encoder_weights: null
   in_channels: 1
-  classes: ${num_classes}
+  classes: ${len:${class_names}}

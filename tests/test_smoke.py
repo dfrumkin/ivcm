@@ -11,12 +11,12 @@ from ivcm.train import run
 
 CONFIGS_DIR = str(Path(__file__).resolve().parents[1] / "configs")
 
-# Small, CPU-only overrides shared across the training tests.
+# Small, CPU-only overrides shared across the training tests. image_size is a root field;
+# sample counts live on the synthetic datasets (data.{train,val}_dataset.num_samples).
 TINY = [
-    "num_classes=3",
-    "data.image_size=32",
-    "data.train_samples=4",
-    "data.val_samples=4",
+    "image_size=32",
+    "data.train_dataset.num_samples=4",
+    "data.val_dataset.num_samples=4",
     "data.batch_size=2",
     "trainer.accelerator=cpu",
     "trainer.enable_progress_bar=false",

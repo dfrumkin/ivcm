@@ -1,13 +1,14 @@
-from ivcm.data.datamodules import (
-    SyntheticClassificationDataModule,
-    SyntheticSegmentationDataModule,
-)
+from ivcm.data.datamodules import BaseDataModule, SegmentationCVDataModule
+from ivcm.data.real import ClassificationImageDataset, NiiSegmentationDataset, contiguous_folds
 from ivcm.data.synthetic import SyntheticClassificationDataset, SyntheticSegmentationDataset
 from ivcm.data.transforms import build_d4_transform, build_eval_transform
 
 __all__ = [
-    "SyntheticClassificationDataModule",
-    "SyntheticSegmentationDataModule",
+    "BaseDataModule",
+    "SegmentationCVDataModule",
+    "ClassificationImageDataset",
+    "NiiSegmentationDataset",
+    "contiguous_folds",
     "SyntheticClassificationDataset",
     "SyntheticSegmentationDataset",
     "build_d4_transform",

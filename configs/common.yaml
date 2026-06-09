@@ -1,0 +1,18 @@
+# @package _global_
+# Shared root settings included by both train.yaml and cv.yaml (avoids duplication and
+# guarantees `seed` exists, which run() reads unconditionally).
+defaults:
+  - trainer: default
+  - logger: wandb
+
+seed: 42
+# Single input resolution for the whole pipeline; datasets/transforms read ${image_size}.
+image_size: 384
+# Plain relative default (no Hydra interpolation) so OmegaConf.resolve works under the
+# bare compose() API used by tests. Override with IVCM_DATA_DIR for an absolute path.
+data_dir: ${oc.env:IVCM_DATA_DIR,data}
+
+hydra:
+  job:
+    # Keep the relative data_dir stable (already the default for version_base=None).
+    chdir: false

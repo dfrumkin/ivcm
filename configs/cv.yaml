@@ -1,0 +1,8 @@
+# Root config for `cross-validate` (ivcm.cv). Segmentation-only and zero-arg: it composes
+# the segmentation task and overrides the data group to the real 5-fold CV datamodule.
+# Explicit ordering — the `override /data` must come after `task` (which selects /data).
+defaults:
+  - common
+  - task: segmentation
+  - override /data: segmentation_real
+  - _self_

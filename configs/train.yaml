@@ -1,12 +1,8 @@
 # Root config. The `task` group is the single switch between classification and
 # segmentation: it composes the matching data / model / loss / optimizer / scheduler.
+# `task: ???` is mandatory (no default) so `uv run train` errors clearly until a task is
+# chosen, rather than silently picking one. Shared root settings come from `common`.
 defaults:
-  - task: classification
-  - trainer: default
-  - logger: wandb
+  - common
+  - task: ???
   - _self_
-
-# Number of classes, tied across data + model via ${num_classes} interpolation.
-# For segmentation this includes the background class.
-num_classes: 5
-seed: 42
