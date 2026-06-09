@@ -3,7 +3,21 @@ name = "ivcm"
 version = "0.1.0"
 description = "Medical image classification and segmentation."
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "torch",
+    "torchvision",
+    "lightning",
+    "hydra-core",
+    "timm",
+    "segmentation-models-pytorch",
+    "albumentations",
+    "torchmetrics",
+    "wandb",
+    "rich",
+]
+
+[project.scripts]
+train = "ivcm.train:main"
 
 [build-system]
 requires = ["hatchling"]

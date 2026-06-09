@@ -1,0 +1,6 @@
+_target_: lightning.pytorch.loggers.WandbLogger
+project: ivcm
+# Offline by default so the smoke test runs without a W&B login. Set mode=online
+# (and log in / set WANDB_API_KEY) to sync runs to the W&B server.
+mode: offline
+save_dir: ${hydra:runtime.output_dir}

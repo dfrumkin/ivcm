@@ -1,0 +1,4 @@
+# @package _global_
+# Disable experiment logging entirely: `train task=... logger=none`.
+# train.py treats an absent/null logger as Trainer(logger=False).
+logger: null

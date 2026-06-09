@@ -1,0 +1,9 @@
+# @package _global_
+# Composes the classification setup. Selecting `task=classification` swaps in all of
+# the data / model / loss / optimizer / scheduler groups below.
+defaults:
+  - /data: classification
+  - /model: classification
+  - /loss: cross_entropy
+  - /optimizer: adamw
+  - /scheduler: cosine

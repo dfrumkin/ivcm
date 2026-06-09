@@ -21,4 +21,4 @@ wandb/
 outputs/
 multirun/
 *.ckpt
-data/
+/data/

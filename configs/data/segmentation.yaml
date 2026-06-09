@@ -1,0 +1,7 @@
+_target_: ivcm.data.SyntheticSegmentationDataModule
+num_classes: ${num_classes}
+image_size: 384
+train_samples: 64
+val_samples: 32
+batch_size: 4
+num_workers: 0

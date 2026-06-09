@@ -1,0 +1,9 @@
+# @package _global_
+# Composes the segmentation setup. Selecting `task=segmentation` swaps in all of
+# the data / model / loss / optimizer / scheduler groups below.
+defaults:
+  - /data: segmentation
+  - /model: segmentation
+  - /loss: dice
+  - /optimizer: adamw
+  - /scheduler: cosine
