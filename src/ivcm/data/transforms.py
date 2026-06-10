@@ -9,8 +9,19 @@ segmentation, easily extended later.
 
 from __future__ import annotations
 
-import albumentations as A
-from albumentations.pytorch import ToTensorV2
+from collections.abc import Callable
+from typing import Any
+
+# albumentations ships no type stubs (see the Transform note below), so these imports are
+# flagged reportMissingTypeStubs; suppress at the boundary.
+import albumentations as A  # pyright: ignore[reportMissingTypeStubs]
+from albumentations.pytorch import ToTensorV2  # pyright: ignore[reportMissingTypeStubs]
+
+# Albumentations transforms ship no type stubs; model them at our boundary as a callable
+# returning the augmented ``{"image": ..., "mask": ...}`` dict. Datasets annotate their
+# ``transform`` with this so downstream values are explicitly ``Any`` (a known type) rather
+# than ``Unknown``, stopping the unknown-type cascade at the boundary.
+Transform = Callable[..., dict[str, Any]]
 
 
 def build_d4_transform(size: int = 384) -> A.Compose:

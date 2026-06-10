@@ -33,6 +33,13 @@ dev = [
     "pytest",
 ]
 
+[tool.pyright]
+include = ["src", "tests"]
+venvPath = "."
+venv = ".venv"
+pythonVersion = "3.12"
+typeCheckingMode = "strict"
+
 [tool.ruff]
 line-length = 120
 src = ["src", "tests"]

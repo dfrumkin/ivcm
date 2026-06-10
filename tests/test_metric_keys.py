@@ -5,7 +5,6 @@ import torch
 from hydra import compose, initialize_config_dir
 from hydra.utils import instantiate
 
-import ivcm  # noqa: F401 — registers the `len` OmegaConf resolver on import
 from ivcm.cv import METRIC_KEYS
 
 CONFIGS_DIR = str(Path(__file__).resolve().parents[1] / "configs")

@@ -65,6 +65,14 @@ When behavior, architecture, workflows, assumptions, or interfaces change:
 - Prefer modifying existing documentation over creating new documentation when the information naturally belongs in an existing document.
 - Refactor documentation structure when it no longer reflects the project.
 
+## Shell Commands
+
+- Prefer simple standalone commands over compound shell scripts.
+- Avoid `bash -lc`, `&&`, `;`, shell loops, and `$()` unless necessary.
+- Run multiple commands separately rather than chaining them.
+- Prefer direct invocations such as `uv run ...`, `uvx ...`, and `python ...`.
+- Do not suppress errors with `2>/dev/null` unless explicitly requested.
+
 ## Human Control
 
 The human is responsible for:

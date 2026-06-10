@@ -13,14 +13,31 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from pathlib import Path
+from typing import Any, cast
 
 import lightning as L
 import nibabel as nib
 import numpy as np
+from nibabel.dataobj_images import DataobjImage
 from torch.utils.data import DataLoader, Dataset
 
 from ivcm.data.real import NiiSegmentationDataset, contiguous_folds
 from ivcm.data.transforms import build_d4_transform, build_eval_transform
+
+# A dataset sample is an (image, target) pair; the image is `Any` because it crosses the
+# untyped albumentations boundary, and the target is an int (classification) or array/tensor
+# mask (segmentation). DataLoaders are parameterised by this so their item type is known.
+Sample = tuple[Any, Any]
+
+
+def _load_volume(path: Path) -> np.ndarray:
+    """Load a ``.nii`` volume as a numpy array.
+
+    ``nib.load`` is typed to return the base ``FileBasedImage``, which exposes no array
+    access; every volume we load is a ``DataobjImage``, so cast to reach ``dataobj``.
+    """
+    image = cast(DataobjImage, nib.load(path))  # pyright: ignore[reportUnknownMemberType]  # nib.load has untyped **kwargs
+    return np.asarray(image.dataobj)
 
 
 class BaseDataModule(L.LightningDataModule):
@@ -28,8 +45,8 @@ class BaseDataModule(L.LightningDataModule):
 
     def __init__(
         self,
-        train_dataset: Dataset,
-        val_dataset: Dataset,
+        train_dataset: Dataset[Sample],
+        val_dataset: Dataset[Sample],
         batch_size: int = 8,
         num_workers: int = 0,
         class_names: Sequence[str] | None = None,
@@ -41,7 +58,7 @@ class BaseDataModule(L.LightningDataModule):
         self.num_workers = num_workers
         self.class_names = list(class_names) if class_names is not None else None
 
-    def train_dataloader(self) -> DataLoader:
+    def train_dataloader(self) -> DataLoader[Sample]:
         return DataLoader(
             self.train_dataset,
             batch_size=self.batch_size,
@@ -50,7 +67,7 @@ class BaseDataModule(L.LightningDataModule):
             persistent_workers=self.num_workers > 0,
         )
 
-    def val_dataloader(self) -> DataLoader:
+    def val_dataloader(self) -> DataLoader[Sample]:
         return DataLoader(
             self.val_dataset,
             batch_size=self.batch_size,
@@ -98,8 +115,8 @@ class SegmentationCVDataModule(L.LightningDataModule):
         if self.train_dataset is not None:
             return
 
-        images = np.asarray(nib.load(self.images_path).dataobj)
-        masks = np.asarray(nib.load(self.masks_path).dataobj)
+        images = _load_volume(self.images_path)
+        masks = _load_volume(self.masks_path)
         n_slices = images.shape[2]
 
         folds = contiguous_folds(n_slices, self.n_folds)
@@ -113,7 +130,8 @@ class SegmentationCVDataModule(L.LightningDataModule):
             images, masks, self.val_indices, transform=build_eval_transform(self.size)
         )
 
-    def train_dataloader(self) -> DataLoader:
+    def train_dataloader(self) -> DataLoader[Sample]:
+        assert self.train_dataset is not None, "call setup() before requesting a dataloader"
         return DataLoader(
             self.train_dataset,
             batch_size=self.batch_size,
@@ -122,7 +140,8 @@ class SegmentationCVDataModule(L.LightningDataModule):
             persistent_workers=self.num_workers > 0,
         )
 
-    def val_dataloader(self) -> DataLoader:
+    def val_dataloader(self) -> DataLoader[Sample]:
+        assert self.val_dataset is not None, "call setup() before requesting a dataloader"
         return DataLoader(
             self.val_dataset,
             batch_size=self.batch_size,

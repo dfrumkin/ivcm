@@ -3,9 +3,17 @@
 from __future__ import annotations
 
 import shutil
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
+
+from ivcm import register_resolvers
+
+# conftest is imported before any test module, so this registers the `${len:...}` OmegaConf
+# resolver ahead of every config composition. Doing it here (rather than via a side-effect
+# `import ivcm` in each test) keeps the registration explicit and in one place.
+register_resolvers()
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -17,7 +25,7 @@ _GUARDED = ("checkpoints", "lightning_logs", "wandb")
 
 
 @pytest.fixture(autouse=True)
-def _no_repo_root_artifacts():
+def _no_repo_root_artifacts() -> Iterator[None]:  # pyright: ignore[reportUnusedFunction]  # invoked by pytest, not by name
     """Fail any test that writes Lightning/W&B output into the repo root, and clean it up.
 
     Only paths newly created during the test are flagged (any pre-existing ones are left

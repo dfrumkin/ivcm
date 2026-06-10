@@ -80,7 +80,12 @@ def run(cfg: DictConfig, run_dir: str | None = None) -> L.Trainer:
     # Lightning auto-injects an unmonitored checkpoint (monitor=None) that also populates
     # best_model_path, and we must not validate that instead of the final model.
     ckpt_cb = trainer.checkpoint_callback
-    use_best = ckpt_cb is not None and ckpt_cb.monitor is not None and bool(ckpt_cb.best_model_path)
+    if isinstance(ckpt_cb, ModelCheckpoint) and ckpt_cb.monitor is not None:
+        # Lightning sets ModelCheckpoint.best_model_path internally without a type annotation,
+        # so pyright reads its access as Unknown here.
+        use_best = bool(ckpt_cb.best_model_path)  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]
+    else:
+        use_best = False
     trainer.validate(model, datamodule=datamodule, ckpt_path="best" if use_best else None)
     if use_best:
         # `validate` on the best checkpoint produced a consistent val/* snapshot in

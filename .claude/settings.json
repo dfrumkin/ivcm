@@ -2,11 +2,20 @@
   "permissions": {
     "allow": [
       "Edit",
-      "Bash(* uv run *)",
-      "Bash(git status)",
-      "Bash(git diff *)",
+
+      "Bash(uv run *)",
+      "Bash(uvx pyright *)",
+
+      "Bash(python3 *)",
+
+      "Bash(cat *)",
+      "Bash(cd *)",
+      "Bash(echo *)",
+      "Bash(find *)",
       "Bash(ls *)",
-      "Bash(find *)"
+
+      "Bash(git status)",
+      "Bash(git diff *)"
     ]
   }
 }

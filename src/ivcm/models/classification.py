@@ -12,7 +12,7 @@ from torchmetrics.classification import (
     MulticlassSpecificity,
 )
 
-from ivcm.models.base import BaseModule
+from ivcm.models.base import BaseModule, Batch
 
 
 class ClassificationModule(BaseModule):
@@ -40,18 +40,18 @@ class ClassificationModule(BaseModule):
         self.val_specificity = MulticlassSpecificity(num_classes=num_classes, average=None)
         self.val_auc = MulticlassAUROC(num_classes=num_classes, average=None)
 
-    def _step(self, batch):
+    def _step(self, batch: Batch) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         images, targets = batch
         logits = self(images)
         loss = self.criterion(logits, targets)
         return loss, logits, targets
 
-    def training_step(self, batch, batch_idx):
-        loss, logits, targets = self._step(batch)
+    def training_step(self, batch: Batch, batch_idx: int) -> torch.Tensor:
+        loss, _, _ = self._step(batch)
         self.log("train/loss", loss, prog_bar=True, on_step=False, on_epoch=True)
         return loss
 
-    def validation_step(self, batch, batch_idx):
+    def validation_step(self, batch: Batch, batch_idx: int) -> torch.Tensor:
         loss, logits, targets = self._step(batch)
         self.val_sensitivity.update(logits, targets)
         self.val_specificity.update(logits, targets)

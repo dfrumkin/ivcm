@@ -21,8 +21,13 @@ uv run pre-commit install   # enable git pre-commit hooks
 uv run pytest               # run tests
 uv run ruff check .         # lint
 uv run ruff format .        # format
+uvx pyright                 # static type check (strict; see docs/coding-standards.md)
 uv run pre-commit run --all-files
 ```
+
+The codebase is clean under Pyright/Pylance **strict** mode. See
+[docs/coding-standards.md](docs/coding-standards.md) for the typing conventions and how to
+handle type-checker diagnostics.
 
 ## Training
 

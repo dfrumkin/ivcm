@@ -5,6 +5,7 @@ import pytest
 import torch
 from hydra import compose, initialize_config_dir
 from hydra.utils import instantiate
+from omegaconf import DictConfig
 
 import ivcm
 from ivcm.train import run
@@ -24,17 +25,17 @@ TINY = [
 ]
 
 
-def _compose(*overrides):
+def _compose(*overrides: str) -> DictConfig:
     with initialize_config_dir(config_dir=CONFIGS_DIR, version_base=None):
         return compose(config_name="train", overrides=[*TINY, *overrides])
 
 
-def test_version_is_string():
+def test_version_is_string() -> None:
     assert isinstance(ivcm.__version__, str)
 
 
 @pytest.mark.parametrize("task", ["classification", "segmentation"])
-def test_fast_dev_run(task):
+def test_fast_dev_run(task: str) -> None:
     """Compose each task's config and run a single fast_dev_run train+val step."""
     cfg = _compose(f"task={task}")
 
@@ -60,7 +61,7 @@ def test_fast_dev_run(task):
     assert torch.isfinite(loss)
 
 
-def test_cli_fast_dev_run_does_not_init_wandb(tmp_path, monkeypatch):
+def test_cli_fast_dev_run_does_not_init_wandb(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The documented `+trainer.fast_dev_run=true` path runs end-to-end via the real
     entrypoint and, with the default W&B logger configured, does not initialize wandb."""
     monkeypatch.setenv("WANDB_MODE", "offline")
@@ -77,7 +78,7 @@ def test_cli_fast_dev_run_does_not_init_wandb(tmp_path, monkeypatch):
     assert not (tmp_path / "wandb").exists()
 
 
-def test_logger_none_disables_logging(tmp_path):
+def test_logger_none_disables_logging(tmp_path: Path) -> None:
     """`logger=none` fully disables Lightning logging (no fallback logger)."""
     cfg = _compose("task=classification", "logger=none", "trainer.max_epochs=1")
 

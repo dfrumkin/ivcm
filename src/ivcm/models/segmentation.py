@@ -14,7 +14,7 @@ from torchmetrics.classification import (
 )
 from torchmetrics.segmentation import DiceScore, MeanIoU
 
-from ivcm.models.base import BaseModule
+from ivcm.models.base import BaseModule, Batch
 
 
 class SegmentationModule(BaseModule):
@@ -37,11 +37,12 @@ class SegmentationModule(BaseModule):
     ) -> None:
         super().__init__(net=net, criterion=criterion, optimizer=optimizer, scheduler=scheduler)
         # Dice/IoU exclude background and consume integer (B, H, W) preds/targets directly.
-        metric_kwargs = dict(num_classes=num_classes, include_background=False, input_format="index")
-        self.train_iou = MeanIoU(**metric_kwargs)
-        self.val_iou = MeanIoU(**metric_kwargs)
-        self.train_dice = DiceScore(**metric_kwargs)
-        self.val_dice = DiceScore(**metric_kwargs)
+        # (Kwargs are inlined rather than packed into a dict so each keyword keeps its precise
+        # type — a heterogeneous dict would widen them to `int | str` and fail the metric sigs.)
+        self.train_iou = MeanIoU(num_classes=num_classes, include_background=False, input_format="index")
+        self.val_iou = MeanIoU(num_classes=num_classes, include_background=False, input_format="index")
+        self.train_dice = DiceScore(num_classes=num_classes, include_background=False, input_format="index")
+        self.val_dice = DiceScore(num_classes=num_classes, include_background=False, input_format="index")
 
         # Binary pixel-level metrics on the foreground (nerve) class. AUROC/AUPRC use the
         # default (non-binned) mode: they just store the pixel predictions (~tens of MB per
@@ -62,7 +63,7 @@ class SegmentationModule(BaseModule):
         # AUPRC (average precision): the best-checkpoint selection metric (val/auprc).
         self.val_auprc = BinaryAveragePrecision()
 
-    def _step(self, batch):
+    def _step(self, batch: Batch) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         images, masks = batch
         masks = masks.long()  # Dice/CE losses and the metrics require integer targets.
         logits = self(images)  # (B, C, H, W)
@@ -71,7 +72,7 @@ class SegmentationModule(BaseModule):
         fg_prob = logits.softmax(dim=1)[:, 1]  # foreground (nerve) probability, (B, H, W)
         return loss, preds, fg_prob, masks
 
-    def training_step(self, batch, batch_idx):
+    def training_step(self, batch: Batch, batch_idx: int) -> torch.Tensor:
         loss, preds, _fg_prob, masks = self._step(batch)
         self.train_iou(preds, masks)
         self.train_dice(preds, masks)
@@ -80,7 +81,7 @@ class SegmentationModule(BaseModule):
         self.log("train/dice", self.train_dice, prog_bar=True, on_step=False, on_epoch=True)
         return loss
 
-    def validation_step(self, batch, batch_idx):
+    def validation_step(self, batch: Batch, batch_idx: int) -> torch.Tensor:
         loss, preds, fg_prob, masks = self._step(batch)
         self.val_iou(preds, masks)
         self.val_dice(preds, masks)

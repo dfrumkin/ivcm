@@ -5,8 +5,7 @@ import pytest
 import torch
 from hydra import compose, initialize_config_dir
 from hydra.utils import instantiate
-
-import ivcm  # noqa: F401 — registers the `len` OmegaConf resolver on import
+from omegaconf import DictConfig
 
 REPO = Path(__file__).resolve().parents[1]
 CONFIGS_DIR = str(REPO / "configs")
@@ -16,7 +15,7 @@ DATA_DIR = REPO / "data"
 pytestmark = pytest.mark.skipif(not DATA_DIR.exists(), reason="proprietary data/ not present")
 
 
-def _compose(*overrides):
+def _compose(*overrides: str) -> DictConfig:
     # Pin data_dir to an absolute path so the test doesn't depend on the pytest working
     # directory (the config default is the relative ${oc.env:IVCM_DATA_DIR,data}); small
     # image_size keeps the smoke runs fast.
@@ -27,7 +26,7 @@ def _compose(*overrides):
         )
 
 
-def _build_model(cfg):
+def _build_model(cfg: DictConfig) -> L.LightningModule:
     return instantiate(
         cfg.model,
         criterion=instantiate(cfg.loss),
@@ -36,7 +35,7 @@ def _build_model(cfg):
     )
 
 
-def _trainer():
+def _trainer() -> L.Trainer:
     return L.Trainer(
         fast_dev_run=True,
         accelerator="cpu",
@@ -46,7 +45,7 @@ def _trainer():
     )
 
 
-def test_classification_real():
+def test_classification_real() -> None:
     cfg = _compose("task=classification", "data=classification_real")
     datamodule = instantiate(cfg.data)
     assert datamodule.class_names == ["endothelium", "epithelium", "nerves", "stroma"]
@@ -57,7 +56,7 @@ def test_classification_real():
     assert loss is not None and torch.isfinite(loss)
 
 
-def test_segmentation_real_cv_split():
+def test_segmentation_real_cv_split() -> None:
     cfg = _compose("task=segmentation", "data=segmentation_real")
     datamodule = instantiate(cfg.data)
     datamodule.setup()

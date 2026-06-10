@@ -11,8 +11,12 @@ augmentations (rotations/flips) applied downstream.
 
 from __future__ import annotations
 
+from typing import Any
+
 import numpy as np
 from torch.utils.data import Dataset
+
+from ivcm.data.transforms import Transform
 
 
 def _class_intensity(class_idx: int, num_classes: int) -> float:
@@ -22,7 +26,7 @@ def _class_intensity(class_idx: int, num_classes: int) -> float:
     return 0.1 + 0.8 * (class_idx / (num_classes - 1))
 
 
-class SyntheticClassificationDataset(Dataset):
+class SyntheticClassificationDataset(Dataset[tuple[Any, int]]):
     """Single-channel images whose class is encoded by a radial ring frequency.
 
     The class controls the spatial frequency of a concentric-ring pattern. This signal
@@ -38,7 +42,7 @@ class SyntheticClassificationDataset(Dataset):
         image_size: int = 384,
         noise: float = 0.05,
         seed: int = 0,
-        transform=None,
+        transform: Transform | None = None,
     ) -> None:
         self.num_samples = num_samples
         self.num_classes = num_classes
@@ -50,7 +54,7 @@ class SyntheticClassificationDataset(Dataset):
     def __len__(self) -> int:
         return self.num_samples
 
-    def __getitem__(self, index: int):
+    def __getitem__(self, index: int) -> tuple[Any, int]:
         rng = np.random.default_rng(self.seed + index)
         label = int(rng.integers(self.num_classes))
 
@@ -68,7 +72,7 @@ class SyntheticClassificationDataset(Dataset):
         return image, label
 
 
-class SyntheticSegmentationDataset(Dataset):
+class SyntheticSegmentationDataset(Dataset[tuple[Any, Any]]):
     """Single-channel images with random disks; per-pixel intensity encodes the class.
 
     Background is class ``0``; foreground disks take classes ``1..num_classes-1``. The
@@ -83,7 +87,7 @@ class SyntheticSegmentationDataset(Dataset):
         max_objects: int = 4,
         noise: float = 0.05,
         seed: int = 0,
-        transform=None,
+        transform: Transform | None = None,
     ) -> None:
         self.num_samples = num_samples
         self.num_classes = num_classes
@@ -96,7 +100,7 @@ class SyntheticSegmentationDataset(Dataset):
     def __len__(self) -> int:
         return self.num_samples
 
-    def __getitem__(self, index: int):
+    def __getitem__(self, index: int) -> tuple[Any, Any]:
         rng = np.random.default_rng(self.seed + index)
         size = self.image_size
         mask = np.zeros((size, size), dtype=np.int64)
@@ -111,7 +115,10 @@ class SyntheticSegmentationDataset(Dataset):
             mask[disk] = cls
 
         # Intensity = class base intensity + noise, so the mask is learnable from pixels.
-        image = np.vectorize(lambda c: _class_intensity(int(c), self.num_classes))(mask)
+        def intensity(c: int) -> float:
+            return _class_intensity(int(c), self.num_classes)
+
+        image = np.asarray(np.vectorize(intensity)(mask), dtype=np.float32)
         image = image + rng.normal(0.0, self.noise, size=(size, size))
         image = np.clip(image, 0.0, 1.0).astype(np.float32)[..., None]
 

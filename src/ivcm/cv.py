@@ -9,10 +9,13 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Mapping
 from copy import deepcopy
 from pathlib import Path
 
 import hydra
+import lightning as L
+import torch
 from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig, open_dict
 from rich.console import Console
@@ -36,7 +39,7 @@ METRIC_KEYS = (
 )
 
 
-def _fold_metrics(callback_metrics, fold: int) -> dict[str, float]:
+def _fold_metrics(callback_metrics: Mapping[str, torch.Tensor], fold: int) -> dict[str, float]:
     """Pull the required metric keys off a fold's callback_metrics, failing loudly."""
     missing = [k for k in METRIC_KEYS if k not in callback_metrics]
     if missing:
@@ -88,9 +91,9 @@ def _fold_wandb_id(fold_dir: Path) -> str:
     path = fold_dir / "wandb_run_id.txt"
     if path.exists():
         return path.read_text().strip()
-    import wandb
+    from wandb.util import generate_id
 
-    run_id = wandb.util.generate_id()
+    run_id = generate_id()
     fold_dir.mkdir(parents=True, exist_ok=True)
     path.write_text(run_id)
     return run_id
@@ -114,7 +117,7 @@ def _summary(per_fold: list[dict[str, float]]) -> tuple[Table, str]:
     return table, "\n".join(lines)
 
 
-def _finalize_loggers(trainer) -> None:
+def _finalize_loggers(trainer: L.Trainer) -> None:
     """Tolerantly finalize whatever loggers the trainer has, then close any live W&B run."""
     for lg in trainer.loggers:
         lg.finalize("success")

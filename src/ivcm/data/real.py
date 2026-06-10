@@ -9,10 +9,13 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 from PIL import Image
 from torch.utils.data import Dataset
+
+from ivcm.data.transforms import Transform
 
 
 def contiguous_folds(n_slices: int, n_folds: int) -> list[np.ndarray]:
@@ -26,14 +29,14 @@ def contiguous_folds(n_slices: int, n_folds: int) -> list[np.ndarray]:
     return np.array_split(np.arange(n_slices), n_folds)
 
 
-class ClassificationImageDataset(Dataset):
+class ClassificationImageDataset(Dataset[tuple[Any, int]]):
     """Single-channel ``.tif`` images under ``root/<class_name>/``.
 
     Class -> index order is fixed by ``class_names`` (the single source of truth, supplied
     from config), so per-class metrics line up across runs.
     """
 
-    def __init__(self, root: str | Path, class_names: Sequence[str], transform=None) -> None:
+    def __init__(self, root: str | Path, class_names: Sequence[str], transform: Transform | None = None) -> None:
         self.root = Path(root)
         self.class_names = list(class_names)
         self.transform = transform
@@ -52,7 +55,7 @@ class ClassificationImageDataset(Dataset):
     def __len__(self) -> int:
         return len(self.samples)
 
-    def __getitem__(self, index: int):
+    def __getitem__(self, index: int) -> tuple[Any, int]:
         path, label = self.samples[index]
         image = np.asarray(Image.open(path).convert("L"), dtype=np.float32) / 255.0
         image = image[..., None]  # HWC, single channel
@@ -61,7 +64,7 @@ class ClassificationImageDataset(Dataset):
         return image, label
 
 
-class NiiSegmentationDataset(Dataset):
+class NiiSegmentationDataset(Dataset[tuple[Any, Any]]):
     """2D slices taken from pre-loaded ``.nii`` volumes.
 
     ``images``/``masks`` are full volumes of shape ``(H, W, n_slices)`` (loaded once by the
@@ -70,7 +73,13 @@ class NiiSegmentationDataset(Dataset):
     nerve).
     """
 
-    def __init__(self, images: np.ndarray, masks: np.ndarray, slice_indices: Sequence[int], transform=None) -> None:
+    def __init__(
+        self,
+        images: np.ndarray,
+        masks: np.ndarray,
+        slice_indices: Sequence[int] | np.ndarray,
+        transform: Transform | None = None,
+    ) -> None:
         self.images = images
         self.masks = masks
         self.slice_indices = list(slice_indices)
@@ -79,7 +88,7 @@ class NiiSegmentationDataset(Dataset):
     def __len__(self) -> int:
         return len(self.slice_indices)
 
-    def __getitem__(self, index: int):
+    def __getitem__(self, index: int) -> tuple[Any, Any]:
         idx = self.slice_indices[index]
         image = self.images[:, :, idx].astype(np.float32) / 255.0
         image = image[..., None]  # HWC, single channel

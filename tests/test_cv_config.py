@@ -5,15 +5,16 @@ import pytest
 from hydra import compose, initialize_config_dir
 from omegaconf import OmegaConf
 
-import ivcm  # noqa: F401 — registers the `len` OmegaConf resolver on import
+# These tests deliberately exercise cv.py's private helpers (white-box unit tests), so the
+# cross-module private-use warnings are suppressed per imported name.
 from ivcm.cv import (
     METRIC_KEYS,
-    _completed_metrics,
-    _find_resume_ckpt,
-    _fold_wandb_id,
-    _prepare_fold_cfg,
-    _reject_resume,
-    _save_fold_metrics,
+    _completed_metrics,  # pyright: ignore[reportPrivateUsage]
+    _find_resume_ckpt,  # pyright: ignore[reportPrivateUsage]
+    _fold_wandb_id,  # pyright: ignore[reportPrivateUsage]
+    _prepare_fold_cfg,  # pyright: ignore[reportPrivateUsage]
+    _reject_resume,  # pyright: ignore[reportPrivateUsage]
+    _save_fold_metrics,  # pyright: ignore[reportPrivateUsage]
 )
 
 CONFIGS_DIR = str(Path(__file__).resolve().parents[1] / "configs")
@@ -58,7 +59,7 @@ def test_cv_rejects_global_ckpt_path():
         _reject_resume(compose(config_name="cv"))
 
 
-def test_completed_metrics_roundtrip(tmp_path):
+def test_completed_metrics_roundtrip(tmp_path: Path) -> None:
     """A finished fold's metrics persist and are read back; missing/corrupt -> not complete."""
     fold_dir = tmp_path / "fold_0"
     assert _completed_metrics(fold_dir) is None  # nothing saved yet
@@ -75,7 +76,7 @@ def test_completed_metrics_roundtrip(tmp_path):
     assert _completed_metrics(fold_dir) is None
 
 
-def test_find_resume_ckpt(tmp_path):
+def test_find_resume_ckpt(tmp_path: Path) -> None:
     """Returns the fold's last.ckpt at the stable <fold_dir>/checkpoints path, else None."""
     fold_dir = tmp_path / "fold_1"
     assert _find_resume_ckpt(fold_dir) is None  # dir absent
@@ -88,7 +89,7 @@ def test_find_resume_ckpt(tmp_path):
     assert _find_resume_ckpt(fold_dir) == str(ckpt)
 
 
-def test_fold_wandb_id_is_stable(tmp_path):
+def test_fold_wandb_id_is_stable(tmp_path: Path) -> None:
     """A fold's W&B id is generated once and reused so a resumed fold continues the same run."""
     fold_dir = tmp_path / "fold_2"
     first = _fold_wandb_id(fold_dir)
@@ -96,7 +97,7 @@ def test_fold_wandb_id_is_stable(tmp_path):
     assert _fold_wandb_id(fold_dir) == first  # reloaded, not regenerated
 
 
-def test_prepare_fold_cfg_resumes_from_fold_checkpoint(tmp_path):
+def test_prepare_fold_cfg_resumes_from_fold_checkpoint(tmp_path: Path) -> None:
     """The per-fold config selects the fold, routes outputs to fold_dir, and pins ckpt_path to
     the fold's last.ckpt when present (the wiring the CV loop relies on for resume)."""
     with initialize_config_dir(config_dir=CONFIGS_DIR, version_base=None):
@@ -115,7 +116,7 @@ def test_prepare_fold_cfg_resumes_from_fold_checkpoint(tmp_path):
     assert resumed.ckpt_path == str(ckpt)
 
 
-def test_prepare_fold_cfg_rejects_resume_without_callbacks(tmp_path):
+def test_prepare_fold_cfg_rejects_resume_without_callbacks(tmp_path: Path) -> None:
     """Resuming a fold checkpoint without callbacks=default would lose best-checkpoint tracking,
     so it must fail loudly rather than silently degrade to final-model metrics."""
     with initialize_config_dir(config_dir=CONFIGS_DIR, version_base=None):
