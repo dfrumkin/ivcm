@@ -97,6 +97,65 @@ rotations + flips) plus a resize to `${image_size}`, via Albumentations.
   Offline runs can be uploaded later with `wandb sync <run-dir>`. To turn logging off
   entirely, use `logger=none`.
 
+- **Best-checkpoint saving** is opt-in via the `callbacks` group (`callbacks=default`); the
+  default `callbacks=none` adds no explicit callbacks. (Lightning still auto-injects its own
+  unmonitored checkpoint unless `trainer.enable_checkpointing=false` — `callbacks=none` only
+  omits *our* monitored callback.) Selecting `callbacks=default` saves the **best** checkpoint
+  — by `val/auc_macro` (classification) or `val/auc` (segmentation), both maximized — plus
+  `last`, and logs the learning rate. Checkpoints land in `<run-dir>/checkpoints/` —
+  `outputs/<date>/<time>/checkpoints/` for `train`, `fold_<n>/checkpoints/` for each CV fold.
+  With a monitored best checkpoint present, the **reported validation metrics are computed
+  from that best checkpoint** (`trainer.validate(ckpt_path="best")`); the full per-epoch curve
+  stays visible in W&B. Without it (the default), the final-epoch model is validated as before.
+
+### Baseline runs
+
+The current "base setup" (no architecture/loss tuning) run for real on the proprietary data,
+with best-checkpoint saving and live W&B (requires `wandb login` / `WANDB_API_KEY`):
+
+```bash
+# Classification baseline (real data, ~50 epochs, best-AUC checkpoint)
+uv run train task=classification data=classification_real \
+  callbacks=default logger.mode=online \
+  trainer.max_epochs=50 data.num_workers=4
+
+# Segmentation baseline — 5-fold cross-validation (best-AUC checkpoint per fold)
+uv run cross-validate \
+  callbacks=default logger.mode=online \
+  trainer.max_epochs=50 data.num_workers=4
+```
+
+**Resuming an interrupted `train` run.** With `callbacks=default` (which writes `last.ckpt`),
+point `ckpt_path` at a saved checkpoint to continue; Lightning restores the epoch, optimizer,
+and scheduler state and trains on to `max_epochs`:
+
+```bash
+uv run train task=classification data=classification_real callbacks=default \
+  trainer.max_epochs=50 \
+  ckpt_path=outputs/<date>/<time>/checkpoints/last.ckpt
+```
+
+`ckpt_path` defaults to `null` (fresh run). When set, new checkpoints continue in the
+**original** checkpoint directory (the resumed checkpoint's own folder), so best-checkpoint
+tracking carries across the whole training history even though the resumed invocation gets a
+new `outputs/<date>/<time>/` for its logs. (The resumed run still starts a new W&B run;
+automatic W&B continuation applies to `cross-validate` folds.)
+
+**Resuming an interrupted `cross-validate` run.** CV resumes **per fold**: re-run pointing
+Hydra at the interrupted run's output directory (a global `ckpt_path` is rejected — one
+checkpoint can't map to five folds):
+
+```bash
+uv run cross-validate callbacks=default trainer.max_epochs=50 \
+  hydra.run.dir=outputs/<date>/<time>
+```
+
+Each fold then **skips** if it already saved `metrics.json`, **resumes** from its `last.ckpt`
+if it was interrupted mid-training, or **runs fresh** otherwise. Requires `callbacks=default`
+(for `last.ckpt`). A resumed fold **continues its original W&B run** and **keeps tracking the
+best checkpoint across the whole fold history** (the stable `fold_<n>/checkpoints/` lets
+Lightning restore the checkpoint state on resume).
+
 ## Configuration layout
 
 ```
@@ -109,6 +168,7 @@ configs/
   model/ loss/            # per-task components
   optimizer/ scheduler/   # shared components
   trainer/ logger/        # Lightning Trainer + W&B logger (logger=none to disable)
+  callbacks/              # none (default) | default = best-AUC ModelCheckpoint + LR monitor
 ```
 
 ## Project layout

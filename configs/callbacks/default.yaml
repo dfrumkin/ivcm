@@ -1,0 +1,21 @@
+# @package _global_
+# Opt-in callbacks for real baseline runs (`callbacks=default`): save the best checkpoint by
+# the per-task validation metric (${checkpoint_monitor}, both tasks `max` AUC) plus `last`,
+# and log the learning rate. `monitor` being set is what train.py's gate keys off to report
+# best-checkpoint metrics (Lightning's auto-injected default checkpoint is unmonitored).
+#
+# No `dirpath` here: train.run() sets it at runtime to a stable <run_dir>/checkpoints (the
+# Hydra run dir for `train`, each fold dir for `cross-validate`), or, when resuming, to the
+# resumed checkpoint's own directory — a stable path lets Lightning restore the best-checkpoint
+# state on resume. LearningRateMonitor requires a logger, so this group is only used with a
+# logger present (the baseline always runs with W&B).
+callbacks:
+  - _target_: lightning.pytorch.callbacks.ModelCheckpoint
+    monitor: ${checkpoint_monitor}
+    mode: ${checkpoint_mode}
+    save_top_k: 1
+    save_last: true
+    auto_insert_metric_name: false
+    filename: best-epoch{epoch:02d}
+  - _target_: lightning.pytorch.callbacks.LearningRateMonitor
+    logging_interval: epoch

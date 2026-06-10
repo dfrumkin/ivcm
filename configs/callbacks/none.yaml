@@ -1,0 +1,6 @@
+# @package _global_
+# No *explicit* callbacks (default): train.py treats an absent/null `callbacks` as
+# Trainer(callbacks=None). Lightning still auto-injects its own unmonitored ModelCheckpoint
+# unless `trainer.enable_checkpointing=false`; this group only omits our monitored best-AUC
+# checkpoint + LR monitor (see callbacks=default).
+callbacks: null

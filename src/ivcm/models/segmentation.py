@@ -41,6 +41,13 @@ class SegmentationModule(BaseModule):
         # acceptable here) and computes via sorting. The binned `thresholds=N` mode would
         # bound memory further but triggers torchmetrics' `_bincount` fallback on MPS, which
         # materializes a huge mesh and OOMs — so non-binned is the portable choice.
+        #
+        # AUROC's sort-based compute hits a buggy MPS kernel at the real pixel scale (returns
+        # out-of-bounds indices -> AcceleratorError), so it is computed on CPU: validation_step
+        # updates it with CPU tensors and on_validation_epoch_end computes + logs the scalar.
+        # It must NOT be handed to self.log() as a Metric object — Lightning's result collection
+        # would relocate its state back to the device and re-trigger the bug. Sensitivity and
+        # specificity are threshold counts (no sort), so they stay on device as logged metrics.
         self.val_sensitivity = BinaryRecall()
         self.val_specificity = BinarySpecificity()
         self.val_auc = BinaryAUROC()
@@ -69,12 +76,19 @@ class SegmentationModule(BaseModule):
         self.val_dice(preds, masks)
         self.val_sensitivity(fg_prob, masks)
         self.val_specificity(fg_prob, masks)
-        self.val_auc(fg_prob, masks)
+        # AUROC accumulated on CPU and computed in on_validation_epoch_end (see __init__).
+        self.val_auc.update(fg_prob.detach().cpu(), masks.detach().cpu())
         self.log("val/loss", loss, prog_bar=True, on_epoch=True)
         self.log("val/iou", self.val_iou, prog_bar=False, on_epoch=True)
         self.log("val/dice", self.val_dice, prog_bar=True, on_epoch=True)
         # Stable keys consumed by cv.py's per-fold aggregation.
         self.log("val/sensitivity", self.val_sensitivity, prog_bar=True, on_epoch=True)
         self.log("val/specificity", self.val_specificity, prog_bar=True, on_epoch=True)
-        self.log("val/auc", self.val_auc, prog_bar=True, on_epoch=True)
         return loss
+
+    def on_validation_epoch_end(self) -> None:
+        # Compute AUROC on CPU here (logging the Metric object in validation_step would let
+        # Lightning move its state to the device and hit the MPS sort bug). val/auc is the
+        # stable key cv.py reads.
+        self.log("val/auc", self.val_auc.compute(), prog_bar=True)
+        self.val_auc.reset()
