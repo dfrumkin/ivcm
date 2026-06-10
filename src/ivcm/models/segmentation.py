@@ -6,7 +6,12 @@ from collections.abc import Callable
 
 import torch
 from torch import nn
-from torchmetrics.classification import BinaryAUROC, BinaryRecall, BinarySpecificity
+from torchmetrics.classification import (
+    BinaryAUROC,
+    BinaryAveragePrecision,
+    BinaryRecall,
+    BinarySpecificity,
+)
 from torchmetrics.segmentation import DiceScore, MeanIoU
 
 from ivcm.models.base import BaseModule
@@ -15,9 +20,11 @@ from ivcm.models.base import BaseModule
 class SegmentationModule(BaseModule):
     """Binary (background vs. nerve) segmentation.
 
-    Reports pixel-level sensitivity, specificity, and AUC (the foreground class) alongside
-    the standard Dice/IoU. ``num_classes`` (= 2, fed from ``${len:${class_names}}``) is
-    needed by the Dice/IoU metrics.
+    Reports pixel-level sensitivity, specificity, AUROC, and AUPRC (the foreground class)
+    alongside the standard Dice/IoU. AUPRC (average precision) is the best-checkpoint
+    selection metric: it is threshold-free (so it does not bake in the 0.5 operating point)
+    and, unlike AUROC, imbalance-aware — it ignores the dominant background true negatives.
+    ``num_classes`` (= 2, fed from ``${len:${class_names}}``) is needed by the Dice/IoU metrics.
     """
 
     def __init__(
@@ -36,21 +43,24 @@ class SegmentationModule(BaseModule):
         self.train_dice = DiceScore(**metric_kwargs)
         self.val_dice = DiceScore(**metric_kwargs)
 
-        # Binary pixel-level metrics on the foreground (nerve) class. AUROC uses the default
-        # (non-binned) mode: it just stores the pixel predictions (~tens of MB per fold,
-        # acceptable here) and computes via sorting. The binned `thresholds=N` mode would
+        # Binary pixel-level metrics on the foreground (nerve) class. AUROC/AUPRC use the
+        # default (non-binned) mode: they just store the pixel predictions (~tens of MB per
+        # fold, acceptable here) and compute via sorting. The binned `thresholds=N` mode would
         # bound memory further but triggers torchmetrics' `_bincount` fallback on MPS, which
         # materializes a huge mesh and OOMs — so non-binned is the portable choice.
         #
-        # AUROC's sort-based compute hits a buggy MPS kernel at the real pixel scale (returns
-        # out-of-bounds indices -> AcceleratorError), so it is computed on CPU: validation_step
-        # updates it with CPU tensors and on_validation_epoch_end computes + logs the scalar.
-        # It must NOT be handed to self.log() as a Metric object — Lightning's result collection
-        # would relocate its state back to the device and re-trigger the bug. Sensitivity and
-        # specificity are threshold counts (no sort), so they stay on device as logged metrics.
+        # Their sort-based compute hits a buggy MPS kernel at the real pixel scale (returns
+        # out-of-bounds indices -> AcceleratorError), so both are computed on CPU:
+        # validation_step updates them with CPU tensors and on_validation_epoch_end computes +
+        # logs the scalars. They must NOT be handed to self.log() as Metric objects — Lightning's
+        # result collection would relocate their state back to the device and re-trigger the bug.
+        # Sensitivity and specificity are threshold counts (no sort), so they stay on device as
+        # logged metrics.
         self.val_sensitivity = BinaryRecall()
         self.val_specificity = BinarySpecificity()
         self.val_auc = BinaryAUROC()
+        # AUPRC (average precision): the best-checkpoint selection metric (val/auprc).
+        self.val_auprc = BinaryAveragePrecision()
 
     def _step(self, batch):
         images, masks = batch
@@ -65,7 +75,7 @@ class SegmentationModule(BaseModule):
         loss, preds, _fg_prob, masks = self._step(batch)
         self.train_iou(preds, masks)
         self.train_dice(preds, masks)
-        self.log("train/loss", loss, prog_bar=True, on_step=True, on_epoch=True)
+        self.log("train/loss", loss, prog_bar=True, on_step=False, on_epoch=True)
         self.log("train/iou", self.train_iou, prog_bar=False, on_step=False, on_epoch=True)
         self.log("train/dice", self.train_dice, prog_bar=True, on_step=False, on_epoch=True)
         return loss
@@ -76,8 +86,10 @@ class SegmentationModule(BaseModule):
         self.val_dice(preds, masks)
         self.val_sensitivity(fg_prob, masks)
         self.val_specificity(fg_prob, masks)
-        # AUROC accumulated on CPU and computed in on_validation_epoch_end (see __init__).
-        self.val_auc.update(fg_prob.detach().cpu(), masks.detach().cpu())
+        # AUROC/AUPRC accumulated on CPU and computed in on_validation_epoch_end (see __init__).
+        fg_prob_cpu, masks_cpu = fg_prob.detach().cpu(), masks.detach().cpu()
+        self.val_auc.update(fg_prob_cpu, masks_cpu)
+        self.val_auprc.update(fg_prob_cpu, masks_cpu)
         self.log("val/loss", loss, prog_bar=True, on_epoch=True)
         self.log("val/iou", self.val_iou, prog_bar=False, on_epoch=True)
         self.log("val/dice", self.val_dice, prog_bar=True, on_epoch=True)
@@ -87,8 +99,10 @@ class SegmentationModule(BaseModule):
         return loss
 
     def on_validation_epoch_end(self) -> None:
-        # Compute AUROC on CPU here (logging the Metric object in validation_step would let
-        # Lightning move its state to the device and hit the MPS sort bug). val/auc is the
-        # stable key cv.py reads.
+        # Compute AUROC/AUPRC on CPU here (logging the Metric objects in validation_step would
+        # let Lightning move their state to the device and hit the MPS sort bug). val/auc and
+        # val/auprc are stable keys cv.py reads; val/auprc is the best-checkpoint monitor.
         self.log("val/auc", self.val_auc.compute(), prog_bar=True)
+        self.log("val/auprc", self.val_auprc.compute(), prog_bar=True)
         self.val_auc.reset()
+        self.val_auprc.reset()

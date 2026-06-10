@@ -40,7 +40,7 @@ The real data is a **proprietary dataset** under `data/` (gitignored, not commit
   specificity, and AUC** on the validation set.
 - **Segmentation** — binary nerve-vs-background, from a single volume pair. The slices are
   split into **5 contiguous folds** for cross-validation (4 train / 1 val per run);
-  reports per-fold and **mean** sensitivity/specificity/AUC.
+  reports per-fold and **mean** Dice/IoU, AUPRC/AUC, and sensitivity/specificity.
 
 For each task the **default data is synthetic** (auto-generated, learnable signal), so the
 whole pipeline runs and is smoke-tested with **no data present**. Real data is opt-in.
@@ -53,12 +53,18 @@ uv run train task=segmentation
 # Real classification (fixed train/val split; per-class metrics on val):
 uv run train task=classification data=classification_real
 
-# Real segmentation 5-fold cross-validation (per-fold + mean metrics):
+# Real segmentation 5-fold cross-validation (per-fold + mean metrics).
+# Bare command = 3-epoch smoke default; for a real run see "Baseline runs" below:
 uv run cross-validate
 ```
 
 `task` has **no default** — `uv run train` errors until a task is chosen. The proprietary
 data lives at `./data` by default; set `IVCM_DATA_DIR` to point elsewhere (absolute path).
+
+The commands above inherit the trainer's default **`max_epochs: 3`** — enough to exercise the
+whole pipeline (a smoke run), not to train a usable model. For real training on the proprietary
+data, raise `trainer.max_epochs` (and `data.num_workers`); the **Baseline runs** section below
+is the canonical way to run classification and segmentation on real data.
 
 Anything in the config tree can be overridden from the command line, e.g.:
 
@@ -101,12 +107,14 @@ rotations + flips) plus a resize to `${image_size}`, via Albumentations.
   default `callbacks=none` adds no explicit callbacks. (Lightning still auto-injects its own
   unmonitored checkpoint unless `trainer.enable_checkpointing=false` — `callbacks=none` only
   omits *our* monitored callback.) Selecting `callbacks=default` saves the **best** checkpoint
-  — by `val/auc_macro` (classification) or `val/auc` (segmentation), both maximized — plus
+  — by `val/auc_macro` (classification) or `val/auprc` (segmentation), both maximized — plus
   `last`, and logs the learning rate. Checkpoints land in `<run-dir>/checkpoints/` —
   `outputs/<date>/<time>/checkpoints/` for `train`, `fold_<n>/checkpoints/` for each CV fold.
   With a monitored best checkpoint present, the **reported validation metrics are computed
   from that best checkpoint** (`trainer.validate(ckpt_path="best")`); the full per-epoch curve
-  stays visible in W&B. Without it (the default), the final-epoch model is validated as before.
+  stays visible in W&B, and the W&B run **summary** `val/*` is overwritten with that
+  best-checkpoint snapshot (a run summary otherwise holds each metric's *last-epoch* value).
+  Without it (the default), the final-epoch model is validated as before.
 
 ### Baseline runs
 
@@ -119,7 +127,7 @@ uv run train task=classification data=classification_real \
   callbacks=default logger.mode=online \
   trainer.max_epochs=50 data.num_workers=4
 
-# Segmentation baseline — 5-fold cross-validation (best-AUC checkpoint per fold)
+# Segmentation baseline — 5-fold cross-validation (best-AUPRC checkpoint per fold)
 uv run cross-validate \
   callbacks=default logger.mode=online \
   trainer.max_epochs=50 data.num_workers=4
@@ -168,7 +176,7 @@ configs/
   model/ loss/            # per-task components
   optimizer/ scheduler/   # shared components
   trainer/ logger/        # Lightning Trainer + W&B logger (logger=none to disable)
-  callbacks/              # none (default) | default = best-AUC ModelCheckpoint + LR monitor
+  callbacks/              # none (default) | default = best-metric ModelCheckpoint + LR monitor
 ```
 
 ## Project layout

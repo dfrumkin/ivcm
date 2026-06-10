@@ -7,7 +7,6 @@ from collections.abc import Callable, Sequence
 import torch
 from torch import nn
 from torchmetrics.classification import (
-    MulticlassAccuracy,
     MulticlassAUROC,
     MulticlassRecall,
     MulticlassSpecificity,
@@ -35,9 +34,6 @@ class ClassificationModule(BaseModule):
         self.class_names = list(class_names)
         num_classes = len(self.class_names)
 
-        self.train_acc = MulticlassAccuracy(num_classes=num_classes)
-        self.val_acc = MulticlassAccuracy(num_classes=num_classes)
-
         # Per-class (average=None) metrics compute to vectors, which self.log cannot accept;
         # they are computed and logged with explicit keys in on_validation_epoch_end.
         self.val_sensitivity = MulticlassRecall(num_classes=num_classes, average=None)
@@ -52,19 +48,15 @@ class ClassificationModule(BaseModule):
 
     def training_step(self, batch, batch_idx):
         loss, logits, targets = self._step(batch)
-        self.train_acc(logits, targets)
-        self.log("train/loss", loss, prog_bar=True, on_step=True, on_epoch=True)
-        self.log("train/acc", self.train_acc, prog_bar=True, on_step=False, on_epoch=True)
+        self.log("train/loss", loss, prog_bar=True, on_step=False, on_epoch=True)
         return loss
 
     def validation_step(self, batch, batch_idx):
         loss, logits, targets = self._step(batch)
-        self.val_acc(logits, targets)
         self.val_sensitivity.update(logits, targets)
         self.val_specificity.update(logits, targets)
         self.val_auc.update(logits, targets)
         self.log("val/loss", loss, prog_bar=True, on_epoch=True)
-        self.log("val/acc", self.val_acc, prog_bar=True, on_epoch=True)
         return loss
 
     def on_validation_epoch_end(self) -> None:

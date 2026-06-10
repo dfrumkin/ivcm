@@ -1,8 +1,8 @@
 """Hydra entry point for segmentation cross-validation (`cross-validate`).
 
 Runs the binary nerve-segmentation task once per fold (4 training blocks, 1 validation
-block), collects each fold's validation sensitivity/specificity/AUC, and reports the
-per-fold values plus their mean. Reuses train.py's ``run()`` unchanged.
+block), collects each fold's validation Dice/IoU, AUPRC/AUROC, and sensitivity/specificity, and
+reports the per-fold values plus their mean. Reuses train.py's ``run()`` unchanged.
 """
 
 from __future__ import annotations
@@ -24,7 +24,16 @@ from ivcm.utils import configure_logging, finish_wandb
 log = logging.getLogger(__name__)
 
 # Validation metric keys logged by SegmentationModule; this is the contract cv depends on.
-METRIC_KEYS = ("val/sensitivity", "val/specificity", "val/auc")
+# Dice/IoU (overlap) and AUPRC/AUROC (ranking; AUPRC is the best-checkpoint selection metric)
+# lead, then the pixel-level sensitivity/specificity.
+METRIC_KEYS = (
+    "val/dice",
+    "val/iou",
+    "val/auprc",
+    "val/auc",
+    "val/sensitivity",
+    "val/specificity",
+)
 
 
 def _fold_metrics(callback_metrics, fold: int) -> dict[str, float]:

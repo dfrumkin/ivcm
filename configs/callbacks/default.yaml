@@ -1,6 +1,7 @@
 # @package _global_
 # Opt-in callbacks for real baseline runs (`callbacks=default`): save the best checkpoint by
-# the per-task validation metric (${checkpoint_monitor}, both tasks `max` AUC) plus `last`,
+# the per-task validation metric (${checkpoint_monitor}, `max`: classification AUC, segmentation
+# AUPRC) plus `last`,
 # and log the learning rate. `monitor` being set is what train.py's gate keys off to report
 # best-checkpoint metrics (Lightning's auto-injected default checkpoint is unmonitored).
 #

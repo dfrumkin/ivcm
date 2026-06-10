@@ -11,6 +11,11 @@ defaults:
 # Binary segmentation: background vs. nerve. Class count is ${len:${class_names}} = 2.
 class_names: [background, nerve]
 
-# Metric the best-checkpoint callback (`callbacks=default`) monitors for this task.
-checkpoint_monitor: val/auc
+# Metric the best-checkpoint callback (`callbacks=default`) monitors for this task. AUPRC, not
+# AUROC or Dice: under heavy foreground/background imbalance AUROC is dominated by easy
+# background true negatives, while Dice@0.5 bakes in a fixed operating point. AUPRC (average
+# precision) is threshold-free *and* imbalance-aware (ignores background true negatives), so it
+# is the right selector while the deployment threshold is undecided. Switch to val/dice once the
+# operating threshold is fixed.
+checkpoint_monitor: val/auprc
 checkpoint_mode: max

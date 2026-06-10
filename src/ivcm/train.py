@@ -12,7 +12,7 @@ from hydra.utils import instantiate
 from lightning.pytorch.callbacks import ModelCheckpoint
 from omegaconf import DictConfig, OmegaConf
 
-from ivcm.utils.logging import configure_logging
+from ivcm.utils import configure_logging, update_summary
 
 log = logging.getLogger(__name__)
 
@@ -63,7 +63,15 @@ def run(cfg: DictConfig, run_dir: str | None = None) -> L.Trainer:
             for cb in callbacks:
                 if isinstance(cb, ModelCheckpoint) and cb.dirpath is None:
                     cb.dirpath = ckpt_dir
-    trainer: L.Trainer = instantiate(cfg.trainer, logger=logger, callbacks=callbacks)
+    # Pin default_root_dir to the run dir so Lightning's fallback output location stays under
+    # outputs/ instead of the repo-root cwd (Hydra runs with `chdir: false`). This covers the
+    # auto-injected *unmonitored* checkpoint Lightning adds when `callbacks != default` and any
+    # `lightning_logs`; the `callbacks=default` ModelCheckpoint sets its own dirpath above and
+    # is unaffected.
+    trainer_kwargs = {"logger": logger, "callbacks": callbacks}
+    if run_dir is not None:
+        trainer_kwargs["default_root_dir"] = run_dir
+    trainer: L.Trainer = instantiate(cfg.trainer, **trainer_kwargs)
 
     # `ckpt_path` (null by default) resumes training from a checkpoint when set.
     trainer.fit(model, datamodule=datamodule, ckpt_path=ckpt_path)
@@ -74,6 +82,13 @@ def run(cfg: DictConfig, run_dir: str | None = None) -> L.Trainer:
     ckpt_cb = trainer.checkpoint_callback
     use_best = ckpt_cb is not None and ckpt_cb.monitor is not None and bool(ckpt_cb.best_model_path)
     trainer.validate(model, datamodule=datamodule, ckpt_path="best" if use_best else None)
+    if use_best:
+        # `validate` on the best checkpoint produced a consistent val/* snapshot in
+        # callback_metrics, but its W&B log was dropped (same global_step as the final training
+        # step -> non-monotonic), leaving the run summary on the last epoch. Point the summary
+        # at the best-checkpoint values so it matches the checkpoint that is actually saved.
+        best_val = {k: float(v) for k, v in trainer.callback_metrics.items() if k.startswith("val/")}
+        update_summary(best_val)
     return trainer
 
 

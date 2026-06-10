@@ -6,6 +6,7 @@ from hydra import compose, initialize_config_dir
 from hydra.utils import instantiate
 
 import ivcm  # noqa: F401 — registers the `len` OmegaConf resolver on import
+from ivcm.cv import METRIC_KEYS
 
 CONFIGS_DIR = str(Path(__file__).resolve().parents[1] / "configs")
 
@@ -49,6 +50,6 @@ def test_segmentation_logs_metric_keys():
     )
     trainer.fit(model, datamodule=datamodule)
 
-    for key in ("val/sensitivity", "val/specificity", "val/auc"):
+    for key in METRIC_KEYS:
         assert key in trainer.callback_metrics, key
         assert torch.isfinite(trainer.callback_metrics[key])
