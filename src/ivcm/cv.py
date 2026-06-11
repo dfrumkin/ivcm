@@ -22,7 +22,7 @@ from rich.console import Console
 from rich.table import Table
 
 from ivcm.train import CONFIG_DIR, run
-from ivcm.utils import configure_logging, finish_wandb
+from ivcm.utils import configure_logging, finish_wandb, stable_wandb_id
 
 log = logging.getLogger(__name__)
 
@@ -86,17 +86,9 @@ def _find_resume_ckpt(fold_dir: Path) -> str | None:
 
 
 def _fold_wandb_id(fold_dir: Path) -> str:
-    """Stable W&B run id for a fold, persisted so a resumed fold continues the same run
-    instead of starting a new one. Generated once on the first attempt, reloaded thereafter."""
-    path = fold_dir / "wandb_run_id.txt"
-    if path.exists():
-        return path.read_text().strip()
-    from wandb.util import generate_id
-
-    run_id = generate_id()
-    fold_dir.mkdir(parents=True, exist_ok=True)
-    path.write_text(run_id)
-    return run_id
+    """Stable W&B run id for a fold, persisted in ``fold_dir`` so a resumed fold continues the
+    same run instead of starting a new one (delegates to the shared ``stable_wandb_id``)."""
+    return stable_wandb_id(fold_dir)
 
 
 def _summary(per_fold: list[dict[str, float]]) -> tuple[Table, str]:

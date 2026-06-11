@@ -10,14 +10,57 @@ import lightning as L
 from hydra.core.hydra_config import HydraConfig
 from hydra.utils import instantiate
 from lightning.pytorch.callbacks import ModelCheckpoint
-from omegaconf import DictConfig, OmegaConf
+from omegaconf import DictConfig, OmegaConf, open_dict
 
-from ivcm.utils import configure_logging, update_summary
+from ivcm.utils import configure_logging, stable_wandb_id, update_summary
 
 log = logging.getLogger(__name__)
 
 # Absolute path so the installed `train` console script finds the repo-root configs.
 CONFIG_DIR = str(Path(__file__).resolve().parents[2] / "configs")
+
+
+def _wandb_anchor_dir(cfg: DictConfig, run_dir: str | None) -> Path | None:
+    """The checkpoint directory a run's W&B identity is anchored to, or ``None`` when there is
+    no stable anchor to tag.
+
+    On resume (``ckpt_path`` is a real file) it is the resumed checkpoint's own directory,
+    **regardless of the callbacks preset** — ``ckpt_path`` is a root-level resume option, so a
+    default ``callbacks=none`` resume of a ``callbacks=default`` checkpoint must still continue
+    that run. On a fresh run it is ``<run_dir>/checkpoints``, but only with ``callbacks`` set
+    (where train.run pins a ModelCheckpoint there); under ``callbacks=none`` Lightning's
+    auto-injected checkpoint lands at its own unstable location, so there is no anchor to tag.
+    """
+    ckpt_path = cfg.get("ckpt_path")
+    resuming = bool(ckpt_path and Path(ckpt_path).is_file())
+    if resuming:
+        ckpt_dir = Path(ckpt_path).resolve().parent
+    elif run_dir is not None:
+        ckpt_dir = (Path(run_dir) / "checkpoints").resolve()
+    else:
+        ckpt_dir = None
+    if ckpt_dir is None:
+        return None
+    return ckpt_dir if (resuming or cfg.get("callbacks")) else None
+
+
+def _pin_wandb_id(cfg: DictConfig, wandb_dir: Path | None) -> None:
+    """Bind a ``WandbLogger`` config to a stable run id anchored at ``wandb_dir`` so a resume
+    from that directory continues the same W&B run.
+
+    No-op when there is no anchor, the logger is absent or not a ``WandbLogger``, or an id is
+    already set (cv.py pins its own per-fold id before calling ``run()`` — that always wins).
+    """
+    if wandb_dir is None:
+        return
+    logger = cfg.get("logger")
+    if not logger or not str(logger.get("_target_", "")).endswith("WandbLogger"):
+        return
+    if logger.get("id"):
+        return
+    with open_dict(cfg):
+        cfg.logger.id = stable_wandb_id(wandb_dir)
+        cfg.logger.resume = "allow"
 
 
 def run(cfg: DictConfig, run_dir: str | None = None) -> L.Trainer:
@@ -41,28 +84,27 @@ def run(cfg: DictConfig, run_dir: str | None = None) -> L.Trainer:
         scheduler=scheduler,
     )
 
+    # Anchor a stable W&B run id to the checkpoint dir *before* building the logger (the id must
+    # be in the config the logger reads), so a resume from that dir continues the same W&B run.
+    wandb_dir = _wandb_anchor_dir(cfg, run_dir)
+    _pin_wandb_id(cfg, wandb_dir)
+
     # `cfg.logger` absent/empty (e.g. `logger=none` or `~logger`) -> logger=False, which
     # fully disables Lightning logging (rather than falling back to the default logger).
     logger = instantiate(cfg.logger) if cfg.get("logger") else False
     # `cfg.callbacks` absent/null (default `callbacks=none`) -> no explicit callbacks.
     callbacks = instantiate(cfg.callbacks) if cfg.get("callbacks") else None
-    # Pin ModelCheckpoint to a stable dir so Lightning restores its best-state on resume (it
-    # skips that restore when dirpath changes). When resuming, continue the *original*
-    # checkpoint dir (the resumed checkpoint's parent) so a fresh Hydra run_dir doesn't break
-    # best-across-history; otherwise use <run_dir>/checkpoints. Both resolved so the stored
-    # and current dirpath strings match regardless of relative/absolute paths or symlinks.
+    # Pin ModelCheckpoint to the same stable dir so Lightning restores its best-state on resume
+    # (it skips that restore when dirpath changes). `wandb_dir` is the resumed checkpoint's own
+    # parent when resuming (so a fresh Hydra run_dir doesn't break best-across-history), else
+    # <run_dir>/checkpoints; resolved so stored/current dirpath strings match regardless of
+    # relative/absolute paths or symlinks. With callbacks set it equals that checkpoint dir, and
+    # is only None here when there is no run_dir.
     ckpt_path = cfg.get("ckpt_path")
-    if callbacks:
-        if ckpt_path and Path(ckpt_path).is_file():
-            ckpt_dir = str(Path(ckpt_path).resolve().parent)
-        elif run_dir is not None:
-            ckpt_dir = str((Path(run_dir) / "checkpoints").resolve())
-        else:
-            ckpt_dir = None
-        if ckpt_dir is not None:
-            for cb in callbacks:
-                if isinstance(cb, ModelCheckpoint) and cb.dirpath is None:
-                    cb.dirpath = ckpt_dir
+    if callbacks and wandb_dir is not None:
+        for cb in callbacks:
+            if isinstance(cb, ModelCheckpoint) and cb.dirpath is None:
+                cb.dirpath = str(wandb_dir)
     # Pin default_root_dir to the run dir so Lightning's fallback output location stays under
     # outputs/ instead of the repo-root cwd (Hydra runs with `chdir: false`). This covers the
     # auto-injected *unmonitored* checkpoint Lightning adds when `callbacks != default` and any

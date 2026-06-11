@@ -3,7 +3,9 @@
     "allow": [
       "Edit",
 
+      "Bash(uv --version)",
       "Bash(uv run *)",
+      "Bash(uv sync *)",
       "Bash(uvx pyright *)",
 
       "Bash(python3 *)",
@@ -16,6 +18,7 @@
       "Bash(sed *)",
 
       "Bash(git status)",
+      "Bash(git add *)",
       "Bash(git diff *)"
     ]
   }

@@ -151,8 +151,17 @@ uv run train task=classification data=classification_real callbacks=default \
 `ckpt_path` defaults to `null` (fresh run). When set, new checkpoints continue in the
 **original** checkpoint directory (the resumed checkpoint's own folder), so best-checkpoint
 tracking carries across the whole training history even though the resumed invocation gets a
-new `outputs/<date>/<time>/` for its logs. (The resumed run still starts a new W&B run;
-automatic W&B continuation applies to `cross-validate` folds.)
+new `outputs/<date>/<time>/` for its logs.
+
+The resumed run also **continues the original W&B run** rather than starting a new one (the
+same continuation that `cross-validate` folds get, below). A run's W&B identity is tied to its
+checkpoint directory: a fresh `callbacks=default` run is tagged with a stable id under
+`<run_dir>/checkpoints/`, and resuming from a checkpoint in that directory reconnects to that
+run. This relies on a stable pinned checkpoint dir, so it covers `callbacks=default` runs (and
+any resume from such a checkpoint). A fresh `callbacks=none` run is **not** tagged (Lightning's
+auto-injected checkpoint has no stable location), so the first resume from its checkpoint
+starts a new W&B run and tags that directory — subsequent resumes from the same directory then
+continue that run.
 
 **Resuming an interrupted `cross-validate` run.** CV resumes **per fold**: re-run pointing
 Hydra at the interrupted run's output directory (a global `ckpt_path` is rejected — one
