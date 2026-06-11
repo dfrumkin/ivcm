@@ -13,6 +13,7 @@
       "Bash(echo *)",
       "Bash(find *)",
       "Bash(ls *)",
+      "Bash(sed *)",
 
       "Bash(git status)",
       "Bash(git diff *)"

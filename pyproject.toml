@@ -21,6 +21,7 @@ dependencies = [
 [project.scripts]
 train = "ivcm.train:main"
 cross-validate = "ivcm.cv:main"
+predict-cv = "ivcm.predict:main"
 
 [build-system]
 requires = ["hatchling"]

@@ -169,6 +169,34 @@ if it was interrupted mid-training, or **runs fresh** otherwise. Requires `callb
 best checkpoint across the whole fold history** (the stable `fold_<n>/checkpoints/` lets
 Lightning restore the checkpoint state on resume).
 
+### Predicting / visual comparison
+
+After a finished cross-validation run, build a single out-of-fold prediction volume for
+slice-by-slice visual comparison against the ground truth (e.g. in ITK-SNAP):
+
+```bash
+uv run predict-cv outputs/<date>/<time>
+```
+
+This takes the **finished CV output directory** as its only argument and writes
+`<cv_dir>/predictions.nii`: a combined binary nerve mask (`0`/`1`, `uint8`) at the GT
+resolution and affine, where **each slice is predicted by the fold's best model that did not
+train on it** (the validation blocks partition every slice, so the volume is directly
+overlayable on `mask_gt.nii`). It requires the CV to have been run with `callbacks=default`
+(so a monitored best checkpoint exists per fold).
+
+Unlike `train`/`cross-validate`, `predict-cv` is **not** a Hydra command: it reads the run's
+own saved `.hydra/config.yaml` (so the model, paths, `n_folds`, and `image_size` match what
+was trained) and writes nothing into the run dir except `predictions.nii`. Two data-location
+cases:
+
+- **Default (relative) `data_dir`** — the volumes are recovered automatically from the run's
+  saved working directory, so the command works from any cwd with no extra setup.
+- **`IVCM_DATA_DIR` was set** — it re-resolves against the current environment, so run
+  `predict-cv` with the same value the CV used (an absolute path is reused as-is; a relative
+  one is still resolved against the saved cwd). The resolved image/mask paths are logged on
+  every run so a mismatch is obvious.
+
 ## Configuration layout
 
 ```
@@ -193,6 +221,7 @@ src/ivcm/
   utils/       # logging setup
   train.py     # Hydra entry point (`train` console script)
   cv.py        # segmentation cross-validation (`cross-validate` console script)
-tests/         # fold + config + metric-key + smoke tests; real-data tests (skip if no data)
+  predict.py   # out-of-fold prediction volume from a finished CV run (`predict-cv` script)
+tests/         # fold + config + metric-key + smoke + predict tests; real-data tests (skip if no data)
 configs/       # Hydra configuration tree
 ```
