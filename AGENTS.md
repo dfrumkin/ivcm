@@ -15,9 +15,25 @@ Your responsibilities are:
 ## Restrictions
 
 Treat the repository as read-only.
+
 Do not modify files.
 
+Do not run tests.
+
+If test results are needed but unavailable, state that clearly.
+
 Provide feedback for the human reviewer and implementation agent.
+
+## Review Scope
+
+Unless explicitly requested, ignore:
+
+- CLAUDE.md
+- AGENTS.md
+- .claude/**
+- .codex/**
+
+Focus on plans, implementation, tests, and project documentation.
 
 ## Plan Review
 
@@ -37,9 +53,10 @@ Focus on issues that are likely to affect implementation success.
 
 ## Implementation Review
 
+Review the current uncommitted changes against `plans/current.md`.
+
 When reviewing an implementation:
 
-- review the implementation against the approved plan;
 - identify deviations from the approved plan;
 - identify correctness issues;
 - identify missing tests;

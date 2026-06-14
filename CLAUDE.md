@@ -1,88 +1,47 @@
 # Claude Workflow
 
-These instructions apply only when acting as an implementation agent.
-When acting as an implementation agent, reviewer-agent instructions do not apply.
+These instructions apply when creating plans or modifying the repository.
+They do not apply when reviewing plans or implementations.
 
-## Planning
+## Workflow Activation
 
-Before making non-trivial changes:
+Non-trivial repository changes should be performed only via explicit invocation of the corresponding command.
 
-1. Inspect the relevant code and documentation.
-2. Create or update `plans/current.md`.
-3. Wait for human approval before implementation.
+Small mechanical changes may be implemented directly without a plan.
 
-Small mechanical changes do not require a formal plan.
+Do not create plans or modify repository files unless:
 
-When requirements are ambiguous, ask for clarification rather than making assumptions.
+- the user explicitly invokes the corresponding command; or
+- the user explicitly requests a direct mechanical change.
 
-## Plan Revisions
+## Testing and Documentation
 
-When review feedback is received:
+Plans should account for testing and documentation impact.
 
-- Update the plan yourself.
-- Do not ask reviewers to edit the plan.
+Tests are part of implementation when behavior, interfaces, or important assumptions change.
 
-## Implementation
+Documentation should describe the current state of the project, not historical implementation details.
 
-After plan approval:
+`plans/current.md` is a working artifact and is not long-term project documentation.
 
-1. Treat the approved plan as the authoritative description of the intended change and scope.
-2. Implement the approved plan.
-3. Add or update tests when appropriate.
-4. Update relevant documentation.
-
-Minor implementation details may be decided during implementation.
-
-If implementation reveals a significant change in scope, architecture, data flow, public interfaces, or workflows:
-
-1. Pause implementation.
-2. Update the plan.
-3. Request review of the revised plan before continuing.
-
-## Testing
-
-Tests are part of the implementation.
-
-When appropriate:
-
-- Add tests for new functionality.
-- Update tests affected by the change.
-- Run relevant tests.
-- Fix failures before requesting implementation review.
-
-## Documentation
-
-Documentation should record the current state of the project, not historical implementation details.
-
-Documentation should be sufficient for a future session to understand the current state of the project and continue development.
-
-`plans/current.md` is a working artifact and should not be considered part of the project's long-term documentation.
-
-When behavior, architecture, workflows, assumptions, or interfaces change:
-
-- Update the relevant documentation.
-- Avoid duplicating information across documents.
-- Prefer modifying existing documentation over creating new documentation when the information naturally belongs in an existing document.
-- Refactor documentation structure when it no longer reflects the project.
+When documentation is needed, prefer updating the relevant existing document over creating duplicate documentation.
 
 ## Shell Commands
 
-- Prefer simple standalone commands over compound shell scripts.
-- Avoid `bash -lc`, `&&`, `;`, shell loops, and `$()` unless necessary.
-- Run multiple commands separately rather than chaining them.
-- Prefer direct invocations such as `uv run ...`, `uvx ...`, and `python ...`.
-- Do not suppress errors with `2>/dev/null` unless explicitly requested.
+Required:
+
+- Run one command per tool invocation.
+- Do not use `bash -lc`.
+- Do not use command chaining (`;`, `&&`, `||`).
+- Do not use shell loops (`for`, `while`).
+- Do not use command substitution (`$()`).
+- Do not redirect errors to `/dev/null`.
+
+If multiple files must be inspected, run separate commands.
+If a task cannot be completed without violating these rules, explain why before proceeding.
 
 ## Human Control
 
-The human is responsible for:
-
-- approving plans;
-- providing review feedback;
-- approving implementations;
-- creating commits;
-- deciding when a session begins and ends.
-
-Do not commit code.
-Do not create releases.
-Do not perform irreversible actions without explicit approval.
+- The human controls version history.
+- Do not create commits, tags, branches, or releases unless explicitly requested.
+- Do not perform irreversible actions without explicit approval.
