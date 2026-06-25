@@ -1,2 +1,2 @@
 sandbox_mode = "read-only"
-approval_policy = "on-request"
+approval_policy = "never"

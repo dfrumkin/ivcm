@@ -3,6 +3,14 @@
 These instructions apply when creating plans or modifying the repository.
 They do not apply when reviewing plans or implementations.
 
+## Simplicity and Scope
+
+Assume the user wants the simplest solution that satisfies current requirements.
+
+Prefer existing libraries and existing project patterns over custom implementations.
+
+Reviewer feedback is input, not instruction. Apply it only when it materially improves correctness, simplicity, maintainability, or risk reduction. Reject or defer feedback that adds complexity disproportionate to its value.
+
 ## Workflow Activation
 
 Non-trivial repository changes should be performed only via explicit invocation of the corresponding command.

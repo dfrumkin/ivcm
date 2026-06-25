@@ -38,7 +38,7 @@ If implementation reveals a significant change in scope, architecture, data flow
 
 Implement the approved plan.
 
-Add or update tests when appropriate.
+Add or update tests required by the plan or by changed behavior.
 
 Update relevant documentation when behavior, architecture, workflows, assumptions, or interfaces change.
 
@@ -69,6 +69,6 @@ Repeat at most N times:
 After the implementation process completes:
 
 - If the review loop terminated because no review feedback resulted in changes, report that the implementation is ready for approval and provide a brief summary of the changes, tests, and documentation updates.
-- If the review loop terminated because the maximum number of review iterations was reached, report that human review is required and summarize the latest unresolved review feedback.
+- If the review loop terminated because the maximum number of review iterations was reached, run one final Codex review without making further changes. Report that human review is required and summarize the latest unresolved review feedback.
 - If a Codex review failed, report the failure and stop implementation. Do not continue with additional review iterations.
 - Wait for human approval before any commit, release, or further work.

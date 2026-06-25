@@ -4,22 +4,28 @@
       "Edit",
 
       "Bash(uv --version)",
+      "Bash(uv lock *)",
       "Bash(uv run *)",
       "Bash(uv sync *)",
       "Bash(uvx pyright *)",
+      "Bash(uvx ruff check *)",
 
       "Bash(python3 *)",
+      "Bash(python *)",
 
       "Bash(cat *)",
       "Bash(cd *)",
       "Bash(echo *)",
       "Bash(find *)",
+      "Bash(grep *)",
       "Bash(ls *)",
       "Bash(sed *)",
 
-      "Bash(git status)",
-      "Bash(git add *)",
-      "Bash(git diff *)"
+      "Bash(git diff *)",
+      "Bash(git log *)",
+      "Bash(git status *)",
+
+      "Bash(codex *)"
     ]
   }
 }
