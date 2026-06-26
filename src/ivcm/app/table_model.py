@@ -9,8 +9,8 @@ from PySide6.QtCore import QAbstractTableModel, QModelIndex, QPersistentModelInd
 
 from ivcm.app.records import ImageRecord
 
-# Column layout: checkbox, name, then the three metrics.
-_COLUMNS = ("", "Name", "Density", "Area", "Perimeter")
+# Column layout: checkbox ("Use"), name, then the three metrics.
+_COLUMNS = ("Use", "Name", "Density", "Area", "Perimeter")
 _METRIC_KEYS = {2: "density", 3: "area", 4: "perimeter"}
 
 _Index = QModelIndex | QPersistentModelIndex

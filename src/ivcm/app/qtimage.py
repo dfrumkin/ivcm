@@ -27,11 +27,16 @@ def numpy_to_pixmap(rgb: np.ndarray) -> QPixmap:
     return QPixmap.fromImage(image.copy())
 
 
-def record_pixmap(record: ImageRecord, config: AppConfig) -> QPixmap:
-    """The record's image as a pixmap: overlaid with its mask if one exists, else the plain image."""
+def record_pixmap(record: ImageRecord, config: AppConfig, alpha: float | None = None) -> QPixmap:
+    """The record's image as a pixmap: overlaid with its mask if one exists, else the plain image.
+
+    ``alpha`` overrides the mask blend strength in ``[0, 1]`` (0 = no mask, 1 = full mask); when
+    ``None`` it falls back to ``config.mask_alpha``.
+    """
     image = load_image(record.path)
     if record.mask is not None:
-        rgb = overlay(image, record.mask, config.mask_color, config.mask_alpha)
+        blend = config.mask_alpha if alpha is None else alpha
+        rgb = overlay(image, record.mask, config.mask_color, blend)
     else:
         rgb = to_rgb(image)
     return numpy_to_pixmap(rgb)

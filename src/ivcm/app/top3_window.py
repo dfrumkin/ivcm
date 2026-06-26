@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
 )
 
 from ivcm.app.config import AppConfig
+from ivcm.app.mask_slider import alpha_from_slider, make_mask_slider
 from ivcm.app.qtimage import record_pixmap
 from ivcm.app.records import ImageRecord
 
@@ -21,8 +22,10 @@ _TILE = 320  # max side length of each tile's image
 class Top3Window(QWidget):
     """Shows the current top-3 records; "Remove" asks the main window to uncheck that record.
 
-    The window owns no state: the main window calls :meth:`refresh` with the current top-3 on
-    every change, so the two windows stay in sync.
+    The main window calls :meth:`refresh` with the current top-3 on every change, so the two
+    windows stay in sync. The window remembers the last records it was given and its own mask
+    slider value so a slider change can re-render the tiles locally (independent of the main
+    window's slider).
     """
 
     remove_requested = Signal(object)  # emits the ImageRecord to uncheck
@@ -31,19 +34,34 @@ class Top3Window(QWidget):
         super().__init__()
         self.setWindowTitle("Top 3 nerve images")
         self._config = config
-        self._row = QHBoxLayout(self)
+        self._records: list[ImageRecord] = []
+
+        layout = QVBoxLayout(self)
+        self._row = QHBoxLayout()
+        layout.addLayout(self._row)
+        self._slider = make_mask_slider(config, self._on_alpha_changed)
+        layout.addWidget(self._slider, alignment=Qt.AlignmentFlag.AlignHCenter)
+
         self._placeholder = QLabel("No nerve images selected.")
         self._row.addWidget(self._placeholder)
 
     def refresh(self, records: list[ImageRecord]) -> None:
         """Rebuild the tiles from the given (already top-3) records."""
+        self._records = list(records)
+        self._rebuild_tiles()
+
+    def _on_alpha_changed(self, _value: int) -> None:
+        self._rebuild_tiles()
+
+    def _rebuild_tiles(self) -> None:
         self._clear()
-        if not records:
+        if not self._records:
             self._placeholder = QLabel("No nerve images selected.")
             self._row.addWidget(self._placeholder)
             return
-        for record in records:
-            self._row.addWidget(self._build_tile(record))
+        alpha = alpha_from_slider(self._slider.value())
+        for record in self._records:
+            self._row.addWidget(self._build_tile(record, alpha))
 
     def _clear(self) -> None:
         while self._row.count():
@@ -54,13 +72,13 @@ class Top3Window(QWidget):
             if widget is not None:
                 widget.deleteLater()
 
-    def _build_tile(self, record: ImageRecord) -> QWidget:
+    def _build_tile(self, record: ImageRecord, alpha: float) -> QWidget:
         tile = QWidget()
         layout = QVBoxLayout(tile)
 
         image_label = QLabel()
         image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        pixmap = record_pixmap(record, self._config)
+        pixmap = record_pixmap(record, self._config, alpha)
         image_label.setPixmap(
             pixmap.scaled(
                 _TILE,

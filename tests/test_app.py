@@ -8,7 +8,7 @@ import numpy as np
 import torch
 
 from ivcm.app.inference import mask_from_seg_logits, predicted_class
-from ivcm.app.records import ImageRecord, sorted_records, top3
+from ivcm.app.records import ImageRecord, selection_after_toggle, sort_key, sorted_records, top3
 from ivcm.app.render import overlay
 
 
@@ -63,6 +63,44 @@ def test_top3_excludes_pending_and_unchecked() -> None:
     unchecked = _rec("u.tif", False, density=9, area=9, perimeter=9)
 
     assert [r.name for r in top3([measured, no_metrics, unchecked])] == ["m.tif"]
+
+
+def test_selection_after_toggle_check_follows_record() -> None:
+    # Four unchecked rows by name; check "d" (now a measured nerve) -> it sorts to the top.
+    a = _rec("a.tif", False)
+    b = _rec("b.tif", False)
+    c = _rec("c.tif", False)
+    d = _rec("d.tif", True, density=9, area=1, perimeter=1)
+    records = sorted([a, b, c, d], key=sort_key)
+
+    # On check, the target follows the toggled record to its new sorted position (row 0 here).
+    assert records.index(d) == 0
+    assert selection_after_toggle(records, d, now_checked=True, prior_row=3) == 0
+
+
+def test_selection_after_toggle_uncheck_keeps_row_position() -> None:
+    # Three checked nerves; uncheck the top one -> it drops below, a different record takes row 0.
+    top = _rec("a.tif", False, density=9, area=1, perimeter=1)  # already reverted to unchecked
+    mid = _rec("b.tif", True, density=5, area=1, perimeter=1)
+    low = _rec("c.tif", True, density=1, area=1, perimeter=1)
+    records = sorted([top, mid, low], key=sort_key)
+
+    # Prior row 0 is kept by position; the record now at row 0 is no longer `top`.
+    assert selection_after_toggle(records, top, now_checked=False, prior_row=0) == 0
+    assert records[0] is not top
+
+
+def test_selection_after_toggle_uncheck_last_row_edge() -> None:
+    records = [_rec(f"{i}.tif", True, density=float(i), area=1, perimeter=1) for i in range(3)]
+    records = sorted(records, key=sort_key)
+    last = len(records) - 1
+    assert selection_after_toggle(records, records[last], now_checked=False, prior_row=last) == last
+
+
+def test_selection_after_toggle_uncheck_no_prior_selection_returns_none() -> None:
+    records = [_rec("a.tif", False), _rec("b.tif", False)]
+    # An invalid prior row (e.g. remove-from-top3 with no table selection) -> no selection.
+    assert selection_after_toggle(records, records[0], now_checked=False, prior_row=-1) is None
 
 
 def test_overlay_blends_mask_region_only() -> None:

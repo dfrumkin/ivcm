@@ -63,3 +63,28 @@ def top3(records: list[ImageRecord]) -> list[ImageRecord]:
     ordered = sorted_records(records)
     eligible = [r for r in ordered if r.is_nerve and r.metrics is not None]
     return eligible[:3]
+
+
+def selection_after_toggle(
+    sorted_records_list: list[ImageRecord],
+    record: ImageRecord,
+    now_checked: bool,
+    prior_row: int,
+) -> int | None:
+    """Row to select after a checkbox toggle re-sorts ``sorted_records_list``.
+
+    On **check** (``now_checked``), follow the toggled ``record`` to its new sorted position. On
+    **uncheck**, keep the prior positional row when it is a valid index so the selection stays
+    where the user was; if ``prior_row`` is out of range (e.g. no prior selection), return
+    ``None`` for "no selection" rather than landing on an unrelated row. A failed check that
+    reverts the record to unchecked arrives here with ``now_checked`` false and so takes the
+    uncheck branch.
+    """
+    if now_checked:
+        try:
+            return sorted_records_list.index(record)
+        except ValueError:
+            return None
+    if not (0 <= prior_row < len(sorted_records_list)):
+        return None
+    return prior_row
