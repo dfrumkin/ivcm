@@ -29,6 +29,58 @@ The codebase is clean under Pyright/Pylance **strict** mode. See
 [docs/coding-standards.md](docs/coding-standards.md) for the typing conventions and how to
 handle type-checker diagnostics.
 
+The desktop UI (below) lives under `src/ivcm/app/` and imports **PySide6**, which is an
+**optional** dependency (the `ui` extra) so headless training/inference runtimes need not install
+Qt. Because Pyright (strict) scans all of `src`, run linting/type-checking/tests with the extra
+synced so the Qt modules resolve:
+
+```bash
+uv sync --extra ui          # install PySide6 for the dev/typecheck environment
+uv run ruff check .
+uvx pyright
+uv run pytest
+```
+
+`tests/test_app.py` itself only imports the Qt-free modules, so it also passes in the base
+environment.
+
+## Clinical review UI
+
+A simple PySide6 desktop app for reviewing a directory of images. The doctor chooses a directory;
+the app classifies each image, segments the predicted-"nerve" ones, runs the existing morphometry
+(`ivcm.morphometry`), and shows a folder-like table — **name, density, area, perimeter** — with a
+per-row checkbox (the manual nerve / not-nerve label) and mask overlays. Selecting a row previews
+the overlay on the side; double-click / Enter opens it large in a blocking window. A second window
+stays in sync showing the top-3 checked images with their metrics. Checking a non-nerve image
+segments it on the spot; everything is preconfigured except the directory.
+
+```bash
+uv sync --extra ui          # install the UI dependency
+uv run ivcm-ui              # launch the app (from this checkout)
+```
+
+**Checkpoints are preconfigured, not committed.** Trained checkpoints and `outputs/` are gitignored
+local artifacts, so the app is **not runnable on a clean checkout** — edit the two `(run_dir, ckpt)`
+pairs in [`src/ivcm/app/config.py`](src/ivcm/app/config.py) to point at this machine's trained runs
+(and tune the morphometry constants there if needed):
+
+```python
+CONFIG = AppConfig(
+    classification=ModelConfig(
+        run_dir="outputs/<your-classification-run>",                 # holds .hydra/config.yaml
+        ckpt="outputs/<your-classification-run>/checkpoints/<ckpt>.ckpt",
+    ),
+    segmentation=ModelConfig(
+        run_dir="outputs/<your-segmentation-run>",                   # holds .hydra/config.yaml
+        ckpt="outputs/<your-segmentation-run>/fold_0/checkpoints/<ckpt>.ckpt",
+    ),
+)
+```
+
+Each `run_dir` must contain `.hydra/config.yaml` (the saved Hydra config, used to rebuild the
+model), and each `ckpt` must point at a real checkpoint under that run. If a path is missing — or
+the configured models are miswired — the app shows a clear error dialog at startup and exits.
+
 ## Training
 
 Training is built on **PyTorch Lightning** with **Hydra** configuration. Both a
@@ -227,7 +279,8 @@ configs/
 src/ivcm/
   data/        # real (.tif/.nii) + synthetic datasets, datamodules, D4+resize transforms
   models/      # classification + segmentation LightningModules (incl. metrics)
-  utils/       # logging setup
+  utils/       # logging setup, device selection (shared by predict + UI)
+  app/         # PySide6 clinical-review UI (`ivcm-ui` console script; optional `ui` extra)
   train.py     # Hydra entry point (`train` console script)
   cv.py        # segmentation cross-validation (`cross-validate` console script)
   predict.py   # out-of-fold prediction volume from a finished CV run (`predict-cv` script)

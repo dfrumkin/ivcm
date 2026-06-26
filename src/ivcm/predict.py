@@ -34,7 +34,12 @@ from torch.utils.data import DataLoader
 from ivcm.data import NiiSegmentationDataset, build_eval_transform, contiguous_folds
 from ivcm.data.datamodules import Sample
 from ivcm.models.segmentation import SegmentationModule
-from ivcm.utils import configure_logging
+from ivcm.utils import configure_logging, select_device
+
+# Kept under the original private name so existing tests that monkeypatch
+# ``ivcm.predict._select_device`` and ``write_oof_predictions``'s call site stay valid; the
+# implementation now lives in ``ivcm.utils`` and is shared with the desktop UI.
+_select_device = select_device
 
 log = logging.getLogger(__name__)
 
@@ -69,15 +74,6 @@ def _resolve_data_path(raw: str, original_cwd: Path) -> Path:
     finds the same files regardless of where it is invoked from."""
     path = Path(raw)
     return path if path.is_absolute() else original_cwd / path
-
-
-def _select_device() -> torch.device:
-    """Pick the best available device once; argmax-only inference is MPS-safe."""
-    if torch.cuda.is_available():
-        return torch.device("cuda")
-    if torch.backends.mps.is_available():
-        return torch.device("mps")
-    return torch.device("cpu")
 
 
 def _find_best_ckpt(fold_dir: Path) -> Path:
