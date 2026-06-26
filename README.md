@@ -231,6 +231,7 @@ src/ivcm/
   train.py     # Hydra entry point (`train` console script)
   cv.py        # segmentation cross-validation (`cross-validate` console script)
   predict.py   # out-of-fold prediction volume from a finished CV run (`predict-cv` script)
+  morphometry.py  # dendritic-cell density/area/perimeter from a 2D mask (smoothed-contour)
 tests/         # fold + config + metric-key + smoke + predict tests; real-data tests (skip if no data)
 configs/       # Hydra configuration tree
 ```

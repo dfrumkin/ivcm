@@ -16,6 +16,8 @@ dependencies = [
     "rich",
     "nibabel",
     "pillow",
+    "scikit-image",
+    "scipy",
 ]
 
 [project.scripts]

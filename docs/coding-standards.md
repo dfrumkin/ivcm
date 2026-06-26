@@ -81,6 +81,7 @@ The only suppressions currently in the tree, and why each is justified:
 | `train.py` / `test_callbacks.py` `best_model_path` | `reportUnknownMemberType`, `reportUnknownArgumentType` | Lightning sets `ModelCheckpoint.best_model_path` internally without an annotation |
 | `tests/conftest.py` autouse fixture | `reportUnusedFunction` | pytest invokes the fixture by collection, not by name |
 | `tests/test_cv_config.py` imports | `reportPrivateUsage` | deliberate white-box unit tests of `cv.py`'s private helpers |
+| `morphometry.py` `scikit-image`/`scipy.ndimage` imports | `reportUnknownVariableType`, `reportMissingTypeStubs` | both ship only partial type info; the CLI flags the callables as `reportUnknownVariableType`, Pylance also flags `scipy.ndimage` as `reportMissingTypeStubs` |
 
 ## Side-effect imports
 
