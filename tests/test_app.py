@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import io
+from importlib import resources
 from pathlib import Path
 
 import numpy as np
 import torch
+from PIL import Image
 
 from ivcm.app.inference import mask_from_seg_logits, predicted_class
 from ivcm.app.records import ImageRecord, selection_after_toggle, sort_key, sorted_records, top3
@@ -143,3 +146,13 @@ def test_mask_from_seg_logits_resizes_to_original() -> None:
     # Nearest-neighbour upsample: the top-left quadrant is foreground, the rest background.
     assert mask[0, 0] == 1
     assert mask[3, 3] == 0
+
+
+def test_app_icon_is_packaged_and_square() -> None:
+    # Guards the real regression: the runtime icon must ship as package data (resolvable via
+    # importlib.resources whether run from a checkout or an installed wheel) and be a valid square
+    # image. Qt-free, so this stays runnable in the base environment.
+    data = resources.files("ivcm.app").joinpath("assets", "icons", "icon.png").read_bytes()
+    image = Image.open(io.BytesIO(data))
+    assert image.format == "PNG"
+    assert image.width == image.height

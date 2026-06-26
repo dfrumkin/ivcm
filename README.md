@@ -81,6 +81,22 @@ Each `run_dir` must contain `.hydra/config.yaml` (the saved Hydra config, used t
 model), and each `ckpt` must point at a real checkpoint under that run. If a path is missing — or
 the configured models are miswired — the app shows a clear error dialog at startup and exits.
 
+### App icon
+
+The app sets a window/taskbar icon (the dendritic-cell artwork) on every platform via
+`QApplication.setWindowIcon`. The assets live under
+[`src/ivcm/app/assets/icons/`](src/ivcm/app/assets/icons/): the committed `icon.png` (1024×1024) is
+the single source of truth, and [`scripts/make_icons.py`](scripts/make_icons.py) regenerates the
+derived per-platform deliverables from it (run `uv run python scripts/make_icons.py` when the
+artwork changes; the generated files are committed). The `.icns` step needs macOS `iconutil` and is
+skipped with a warning elsewhere.
+
+A future bundler/installer (none exists today) uses, per platform: `icon.icns` (macOS),
+`icon.ico` (Windows), and the freedesktop `linux/hicolor/<size>x<size>/apps/ivcm-ui.png` tree plus
+`ivcm-ui.desktop` (Linux). To install on Linux by hand, copy the `hicolor` tree under
+`~/.local/share/icons` (or `/usr/share/icons`) and `ivcm-ui.desktop` into the matching
+`applications/` directory (adjusting its `Exec=` if `ivcm-ui` is not on `PATH`).
+
 ## Training
 
 Training is built on **PyTorch Lightning** with **Hydra** configuration. Both a

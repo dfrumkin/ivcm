@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=ivcm clinical review
+Comment=Review a directory of confocal images: classify, segment, and measure nerves
+Exec=ivcm-ui
+Icon=ivcm-ui
+Terminal=false
+Categories=Science;MedicalSoftware;
