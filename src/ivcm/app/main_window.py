@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from PySide6.QtCore import QModelIndex, QSize, Qt
@@ -23,6 +24,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from ivcm.app.batch import process_directory
 from ivcm.app.inference import InferenceEngine, load_image
 from ivcm.app.mask_slider import alpha_from_slider, make_mask_slider
 from ivcm.app.overlay_dialog import OverlayDialog
@@ -152,9 +154,6 @@ class MainWindow(QMainWindow):
         self.model.refresh()
         self.top3_window.refresh([])
 
-        records: list[ImageRecord] = []
-        skipped: list[str] = []
-        seg_failed: list[str] = []
         progress = QProgressDialog("Processing images…", "", 0, len(files), self)
         progress.setCancelButton(None)  # uncancellable: the batch always runs to completion
         # Application-modal (not window-modal): setValue pumps events during the batch, and the
@@ -163,12 +162,19 @@ class MainWindow(QMainWindow):
         progress.setWindowModality(Qt.WindowModality.ApplicationModal)
         progress.setMinimumDuration(0)
 
-        for i, path in enumerate(files):
-            progress.setValue(i)  # pumps events for the modal dialog so it repaints
-            record = self._process_file(path, skipped, seg_failed)
-            if record is not None:
-                records.append(record)
-        progress.setValue(len(files))
+        # The batch stays synchronous and modal (as before); process_directory runs the chunked,
+        # batched, parallel-decoded pipeline and reports cumulative progress per chunk.
+        # progress.setValue pumps events so the modal dialog repaints.
+        with ThreadPoolExecutor(max_workers=self.engine.config.num_workers) as executor:
+            records, skipped, seg_failed = process_directory(
+                files,
+                engine=self.engine,
+                load=load_image,
+                executor=executor,
+                batch_size=self.engine.config.batch_size,
+                on_progress=progress.setValue,
+            )
+        progress.setValue(len(files))  # also covers the empty-directory case (no chunks)
 
         self.records[:] = records
         self._resort_and_refresh(lambda _recs: None)  # fresh batch: leave no selection
@@ -180,29 +186,6 @@ class MainWindow(QMainWindow):
         if seg_failed:
             message += f" Segmentation failed (left unchecked) for {len(seg_failed)}: {', '.join(seg_failed)}."
         self.statusBar().showMessage(message)
-
-    def _process_file(self, path: Path, skipped: list[str], seg_failed: list[str]) -> ImageRecord | None:
-        """Classify (and segment if nerve) one file; ``None`` if it can't be loaded/classified."""
-        try:
-            image = load_image(path)
-            is_nerve = self.engine.classify(image)
-        except Exception:
-            log.exception("Skipping %s (load/classify failed)", path.name)
-            skipped.append(path.name)
-            return None
-
-        record = ImageRecord(path=path, is_nerve=is_nerve)
-        if is_nerve:
-            try:
-                record.mask = self.engine.segment(image)
-                record.metrics = self.engine.morphometry(record.mask)
-            except Exception:
-                log.exception("Segmentation failed for %s; leaving unchecked", path.name)
-                record.is_nerve = False
-                record.mask = None
-                record.metrics = None
-                seg_failed.append(path.name)
-        return record
 
     # --- checkbox / top-3 ------------------------------------------------
 

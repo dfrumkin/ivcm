@@ -4,11 +4,21 @@
 classification, segmentation, and morphometry. The class-index and mask-resize logic are split
 into small pure helpers (taking ready-made logits) so they are unit-testable without a
 checkpoint. All forward passes run under ``torch.inference_mode()``.
+
+Two flavours of inference coexist. The single-image ``classify`` / ``segment`` methods serve the
+interactive checkbox path (and the per-file fallback used by the directory batch). The batched
+``classify_batch`` / ``segment_batch`` methods serve the directory batch (``ivcm.app.batch``): they
+preprocess a list of images (optionally in parallel via a passed executor) into one stacked tensor
+and run the forward in device sub-batches, amortising per-launch overhead. Preprocessing in the
+batch path produces CPU tensors only; the per-sub-batch device transfer happens in
+``forward_in_chunks`` so worker threads never touch the device.
 """
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
+from concurrent.futures import Executor
+from functools import partial
 from pathlib import Path
 from typing import Any, cast
 
@@ -41,6 +51,33 @@ def predicted_class(logits: torch.Tensor) -> int:
     return int(logits.argmax(dim=-1).reshape(-1)[0].item())
 
 
+def predicted_classes(logits: torch.Tensor) -> list[int]:
+    """Per-row argmax class indices of batched classification ``logits`` (shape ``(N, C)``).
+
+    The batch generalisation of ``predicted_class``: row ``i`` of the result equals
+    ``predicted_class(logits[i : i + 1])``.
+    """
+    indices = logits.argmax(dim=-1).reshape(-1)
+    return [int(indices[i].item()) for i in range(indices.shape[0])]
+
+
+def forward_in_chunks(model: nn.Module, x: torch.Tensor, batch_size: int, device: torch.device) -> torch.Tensor:
+    """Run ``model`` over a CPU input ``x`` in device sub-batches and concatenate outputs on CPU.
+
+    ``x`` is a stacked ``(N, ...)`` CPU tensor. It is split into sub-batches of at most
+    ``batch_size``, each moved to ``device`` and run under ``torch.inference_mode()``; the outputs
+    are moved back to CPU and concatenated in order. Moving per sub-batch (not the whole stack)
+    bounds device memory and keeps the device-transfer contract explicit, so callers can prepare
+    inputs off-device (e.g. in worker threads) without issuing concurrent transfers.
+    """
+    outputs: list[torch.Tensor] = []
+    with torch.inference_mode():
+        for start in range(0, x.shape[0], batch_size):
+            chunk = x[start : start + batch_size].to(device)
+            outputs.append(cast(torch.Tensor, model(chunk)).cpu())
+    return torch.cat(outputs, dim=0)
+
+
 def mask_from_seg_logits(logits: torch.Tensor, orig_hw: tuple[int, int]) -> np.ndarray:
     """Binary ``uint8`` mask from segmentation ``logits`` (``(1, C, h, w)``), resized to ``orig_hw``.
 
@@ -51,6 +88,17 @@ def mask_from_seg_logits(logits: torch.Tensor, orig_hw: tuple[int, int]) -> np.n
     preds = logits.argmax(dim=1)  # (1, h, w)
     resized = F.interpolate(preds[:, None].float(), size=orig_hw, mode="nearest")
     return resized[0, 0].to(torch.uint8).cpu().numpy()
+
+
+def _transform_image(image: np.ndarray, size: int) -> torch.Tensor:
+    """Resize/convert a single ``HWC`` image to a ``(1, size, size)`` **CPU** CHW tensor.
+
+    Builds a fresh ``build_eval_transform`` per call (so no transform instance is shared across
+    worker threads) and does not move to any device — the batch path stacks these and transfers
+    once per sub-batch in ``forward_in_chunks``.
+    """
+    out = cast("dict[str, torch.Tensor]", build_eval_transform(size)(image=image))
+    return out["image"]
 
 
 def _select_node(cfg: DictConfig, key: str) -> Any:
@@ -140,8 +188,15 @@ class InferenceEngine:
 
     def _preprocess(self, image: np.ndarray, size: int) -> torch.Tensor:
         """Resize/convert a single ``HWC`` image to a batched ``(1, 1, size, size)`` device tensor."""
-        out = cast("dict[str, torch.Tensor]", build_eval_transform(size)(image=image))
-        return out["image"].unsqueeze(0).to(self.device)
+        return _transform_image(image, size).unsqueeze(0).to(self.device)
+
+    def _stack(self, images: Sequence[np.ndarray], size: int, executor: Executor | None) -> torch.Tensor:
+        """Preprocess ``images`` (optionally in parallel) into one stacked ``(N, 1, size, size)`` CPU tensor."""
+        if executor is None:
+            tensors: Iterable[torch.Tensor] = (_transform_image(image, size) for image in images)
+        else:
+            tensors = executor.map(partial(_transform_image, size=size), images)
+        return torch.stack(list(tensors), dim=0)
 
     def classify(self, image: np.ndarray) -> bool:
         """Whether the image's predicted class is ``nerves``."""
@@ -150,6 +205,17 @@ class InferenceEngine:
             logits = cast(torch.Tensor, self._cls_model(x))
         return predicted_class(logits) == self.nerve_index
 
+    def classify_batch(self, images: Sequence[np.ndarray], executor: Executor | None = None) -> list[bool]:
+        """Batched ``classify``: whether each image's predicted class is ``nerves``.
+
+        Preprocesses ``images`` (in parallel when ``executor`` is given) and runs the classifier in
+        ``config.batch_size`` device sub-batches. ``images`` must be non-empty (the caller guards
+        the empty case; stacking an empty list would raise).
+        """
+        x = self._stack(images, self.cls_size, executor)
+        logits = forward_in_chunks(self._cls_model, x, self.config.batch_size, self.device)
+        return [cls == self.nerve_index for cls in predicted_classes(logits)]
+
     def segment(self, image: np.ndarray) -> np.ndarray:
         """Binary nerve mask at the original image resolution."""
         height, width = int(image.shape[0]), int(image.shape[1])
@@ -157,6 +223,20 @@ class InferenceEngine:
         with torch.inference_mode():
             logits = cast(torch.Tensor, self._seg_model(x))
         return mask_from_seg_logits(logits, (height, width))
+
+    def segment_batch(self, images: Sequence[np.ndarray], executor: Executor | None = None) -> list[np.ndarray]:
+        """Batched ``segment``: a binary nerve mask per image at its original resolution.
+
+        Preprocesses ``images`` (in parallel when ``executor`` is given) and runs segmentation in
+        ``config.batch_size`` device sub-batches; each mask is resized back to its own original size
+        (sizes differ, so this stays per image). ``images`` must be non-empty.
+        """
+        x = self._stack(images, self.seg_size, executor)
+        logits = forward_in_chunks(self._seg_model, x, self.config.batch_size, self.device)
+        return [
+            mask_from_seg_logits(logits[i : i + 1], (int(image.shape[0]), int(image.shape[1])))
+            for i, image in enumerate(images)
+        ]
 
     def morphometry(self, mask: np.ndarray) -> dict[str, float]:
         """Density / area / perimeter for a mask, using the configured morphometry constants."""

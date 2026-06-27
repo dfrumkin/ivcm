@@ -65,16 +65,29 @@ class AppConfig:
 
     accepted_extensions: tuple[str, ...] = field(default_factory=lambda: (".tif", ".tiff", ".png", ".jpg", ".jpeg"))
 
+    # Directory-batch throughput: ``batch_size`` is both the inference sub-batch size and the
+    # file-chunk size of the pipeline; ``num_workers`` is the thread count for parallel decode /
+    # preprocess / morphometry. Both must be >= 1 (a non-positive batch breaks chunking/forward
+    # splitting and ThreadPoolExecutor rejects ``max_workers <= 0``).
+    batch_size: int = 16
+    num_workers: int = 4
+
+    def __post_init__(self) -> None:
+        if self.batch_size < 1:
+            raise ValueError(f"batch_size must be >= 1; got {self.batch_size}.")
+        if self.num_workers < 1:
+            raise ValueError(f"num_workers must be >= 1; got {self.num_workers}.")
+
 
 # Edit these to this machine's trained runs. Both ``run_dir`` values must contain
 # ``.hydra/config.yaml``; both ``ckpt`` values must point at a real checkpoint under the run.
 CONFIG = AppConfig(
     classification=ModelConfig(
-        run_dir="outputs/<your-classification-run>",
-        ckpt="outputs/<your-classification-run>/checkpoints/<your-classification>.ckpt",
+        run_dir="outputs/2026-06-10/12-09-43",
+        ckpt="outputs/2026-06-10/12-09-43/checkpoints/best-epoch38.ckpt",
     ),
     segmentation=ModelConfig(
-        run_dir="outputs/<your-segmentation-run>",
-        ckpt="outputs/<your-segmentation-run>/fold_0/checkpoints/<your-segmentation>.ckpt",
+        run_dir="outputs/2026-06-10/15-42-08",
+        ckpt="outputs/2026-06-10/15-42-08/fold_1/checkpoints/best-epoch38.ckpt",
     ),
 )
