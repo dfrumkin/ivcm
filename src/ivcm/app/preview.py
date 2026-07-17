@@ -165,7 +165,7 @@ class EditablePreview(QLabel):
     def _paint_at(self, position: QPointF) -> None:
         mask = self._working_mask
         pixmap = self.pixmap()
-        if mask is None or self._active_value is None or pixmap is None or pixmap.isNull():
+        if mask is None or self._active_value is None or pixmap.isNull():
             return
         displayed = (pixmap.width(), pixmap.height())
         mapped = map_to_mask((position.x(), position.y()), displayed, (self.width(), self.height()), mask.shape)
