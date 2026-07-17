@@ -30,6 +30,7 @@ from ivcm.app.mask_slider import alpha_from_slider, make_mask_slider
 from ivcm.app.overlay_dialog import OverlayDialog
 from ivcm.app.qtimage import record_pixmap
 from ivcm.app.records import ImageRecord, selection_after_toggle, sort_key, top3
+from ivcm.app.summary_panel import SummaryPanel
 from ivcm.app.table_model import ResultsTableModel
 from ivcm.app.top3_window import Top3Window
 
@@ -71,8 +72,13 @@ class MainWindow(QMainWindow):
         # the top-3 window's slider).
         self.mask_slider = make_mask_slider(engine.config, self._on_mask_alpha_changed)
 
+        # Summary of the checked images, above the preview; its height is fixed by its own rows,
+        # so the preview keeps the rest of the pane.
+        self.summary_panel = SummaryPanel()
+
         right_pane = QWidget()
         right_layout = QVBoxLayout(right_pane)
+        right_layout.addWidget(self.summary_panel)
         right_layout.addWidget(self.preview)
         right_layout.addWidget(self.mask_slider, alignment=Qt.AlignmentFlag.AlignHCenter)
 
@@ -104,7 +110,8 @@ class MainWindow(QMainWindow):
 
         Budgets the sum of column widths, the vertical header, the table frame, and a
         vertical-scrollbar-width allowance (so columns still fit once enough rows show a vertical
-        scrollbar), then adds the preview pane and layout margins.
+        scrollbar), then adds the preview pane and layout margins. The height adds the summary
+        panel's own height on top of the previous budget, so the panel costs the preview nothing.
         """
         columns = _USE_WIDTH + _NAME_WIDTH + 3 * _METRIC_WIDTH
         frame = 2 * self.table.frameWidth()
@@ -112,7 +119,9 @@ class MainWindow(QMainWindow):
         scrollbar = self.style().pixelMetric(self.style().PixelMetric.PM_ScrollBarExtent)
         table_width = columns + frame + vheader + scrollbar
         width = table_width + _PREVIEW + 60  # 60: central-layout margins/spacing slack
-        return QSize(width, 700)
+        # The panel has a fixed height, so its minimum is its real height (its size *hint* shrinks
+        # to the placeholder while nothing is selected, which is not what the layout will give it).
+        return QSize(width, 700 + self.summary_panel.minimumHeight())
 
     def _build_toolbar(self) -> None:
         toolbar = QToolBar()
@@ -149,10 +158,13 @@ class MainWindow(QMainWindow):
 
         # Clear current state before the batch so no selection/row from the previous directory
         # carries over by position into the new one (matches the plan's "clears the records").
+        # The batch below pumps events, so the summary is cleared here too: otherwise the panel
+        # would show the previous directory's numbers for the whole duration of the batch.
         self.records.clear()
         self.table.setCurrentIndex(QModelIndex())
         self.model.refresh()
         self.top3_window.refresh([])
+        self.summary_panel.refresh([])
 
         progress = QProgressDialog("Processing images…", "", 0, len(files), self)
         progress.setCancelButton(None)  # uncancellable: the batch always runs to completion
@@ -236,6 +248,7 @@ class MainWindow(QMainWindow):
         target = select(self.records)
         self.model.refresh()
         self.top3_window.refresh(top3(self.records))
+        self.summary_panel.refresh(self.records)
         self._apply_selection(target)
         self._update_preview()
 

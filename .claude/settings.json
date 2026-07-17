@@ -6,6 +6,7 @@
       "Bash(uv --version)",
       "Bash(uv lock *)",
       "Bash(uv run *)",
+      "Bash(QT_QPA_PLATFORM=offscreen uv run *)",
       "Bash(uv sync *)",
       "Bash(uvx pyright *)",
       "Bash(uvx ruff check *)",

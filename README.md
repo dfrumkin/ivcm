@@ -50,9 +50,12 @@ A simple PySide6 desktop app for reviewing a directory of images. The doctor cho
 the app classifies each image, segments the predicted-"nerve" ones, runs the existing morphometry
 (`ivcm.morphometry`), and shows a folder-like table — **name, density, area, perimeter** — with a
 per-row checkbox (the manual nerve / not-nerve label) and mask overlays. Selecting a row previews
-the overlay on the side; double-click / Enter opens it large in a blocking window. A second window
-stays in sync showing the top-3 checked images with their metrics. Checking a non-nerve image
-segments it on the spot; everything is preconfigured except the directory.
+the overlay on the side; above that preview a compact panel summarises the checked images — the
+count, plus a small distribution strip per metric (over a `0`-to-max axis) marking the mean, ±1 SD,
+and min/max, with the exact numbers on hover. Double-click / Enter opens an image large in a
+blocking window. A second window stays in sync showing the top-3 checked images with their metrics.
+Checking a non-nerve image segments it on the spot; everything is preconfigured except the
+directory.
 
 ```bash
 uv sync --extra ui          # install the UI dependency

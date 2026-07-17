@@ -13,6 +13,7 @@ from PIL import Image
 from ivcm.app.inference import mask_from_seg_logits, predicted_class
 from ivcm.app.records import ImageRecord, selection_after_toggle, sort_key, sorted_records, top3
 from ivcm.app.render import overlay
+from ivcm.app.summary import selection_summary
 
 
 def _rec(
@@ -104,6 +105,91 @@ def test_selection_after_toggle_uncheck_no_prior_selection_returns_none() -> Non
     records = [_rec("a.tif", False), _rec("b.tif", False)]
     # An invalid prior row (e.g. remove-from-top3 with no table selection) -> no selection.
     assert selection_after_toggle(records, records[0], now_checked=False, prior_row=-1) is None
+
+
+def test_selection_summary_covers_only_checked_measured_records() -> None:
+    checked = [
+        _rec("a.tif", True, density=2, area=10, perimeter=100),
+        _rec("b.tif", True, density=4, area=20, perimeter=300),
+    ]
+    unchecked_but_measured = _rec("c.tif", False, density=99, area=99, perimeter=99)
+    checked_but_unmeasured = ImageRecord(path=Path("d.tif"), is_nerve=True, metrics=None)
+
+    summary = selection_summary([*checked, unchecked_but_measured, checked_but_unmeasured], bins=4)
+
+    assert summary.count == 2
+    # Only the two checked-and-measured records contribute: the 99s never reach the statistics.
+    assert summary.metrics["density"].mean == 3.0
+    assert summary.metrics["area"].maximum == 20.0
+    assert summary.metrics["perimeter"].maximum == 300.0
+
+
+def test_selection_summary_statistics_across_all_three_metrics() -> None:
+    records = [
+        _rec("a.tif", True, density=2, area=10, perimeter=100),
+        _rec("b.tif", True, density=4, area=20, perimeter=200),
+        _rec("c.tif", True, density=6, area=60, perimeter=300),
+    ]
+
+    summary = selection_summary(records, bins=4)
+
+    assert summary.count == 3
+    density = summary.metrics["density"]
+    assert density.mean == 4.0
+    assert density.sd == 2.0  # sample SD (ddof=1) of 2, 4, 6
+    assert (density.minimum, density.maximum) == (2.0, 6.0)
+
+    area = summary.metrics["area"]
+    assert area.mean == 30.0
+    assert (area.minimum, area.maximum) == (10.0, 60.0)
+
+    perimeter = summary.metrics["perimeter"]
+    assert perimeter.mean == 200.0
+    assert perimeter.sd == 100.0  # sample SD of 100, 200, 300
+    assert (perimeter.minimum, perimeter.maximum) == (100.0, 300.0)
+
+
+def test_selection_summary_histogram_accounts_for_every_selected_image() -> None:
+    # Values at the axis ends and between: the image at the maximum must land in the final bin
+    # rather than fall outside the histogram, so the counts total the selected count.
+    records = [_rec(f"{i}.tif", True, density=float(i), area=1, perimeter=1) for i in (0, 1, 3, 4)]
+
+    summary = selection_summary(records, bins=4)
+    histogram = summary.metrics["density"].histogram
+
+    assert len(histogram) == 4
+    assert sum(histogram) == summary.count == 4
+    # Bins over [0, 4]: [0,1) -> 0; [1,2) -> 1; [2,3) -> nothing; [3,4] -> 3 and the max, 4.
+    assert histogram == (1, 1, 0, 2)
+
+
+def test_selection_summary_single_record_has_no_measurable_sd() -> None:
+    summary = selection_summary([_rec("a.tif", True, density=5, area=7, perimeter=9)], bins=4)
+
+    assert summary.count == 1
+    density = summary.metrics["density"]
+    assert (density.mean, density.minimum, density.maximum) == (5.0, 5.0, 5.0)
+    assert density.sd is None  # a sample SD needs two images
+    assert sum(density.histogram) == 1
+
+
+def test_selection_summary_empty_selection_has_no_statistics() -> None:
+    summary = selection_summary([_rec("a.tif", False), _rec("b.tif", False)], bins=4)
+
+    assert summary.count == 0
+    for metric in summary.metrics.values():
+        assert (metric.mean, metric.sd, metric.minimum, metric.maximum) == (None, None, None, None)
+        assert sum(metric.histogram) == 0
+
+
+def test_selection_summary_all_zero_metric_collapses_to_first_bin() -> None:
+    # A zero maximum leaves the axis no extent; the values must still all be accounted for.
+    records = [_rec(f"{i}.tif", True, density=0, area=0, perimeter=0) for i in range(3)]
+
+    density = selection_summary(records, bins=4).metrics["density"]
+
+    assert (density.mean, density.minimum, density.maximum) == (0.0, 0.0, 0.0)
+    assert density.histogram == (3, 0, 0, 0)
 
 
 def test_overlay_blends_mask_region_only() -> None:
