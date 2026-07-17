@@ -10,6 +10,14 @@ import numpy as np
 import torch
 from PIL import Image
 
+from ivcm.app.editing import (
+    EditHistory,
+    map_to_mask,
+    mask_changed,
+    raise_slider_to_floor,
+    stamp_disk,
+    stamp_stroke,
+)
 from ivcm.app.inference import mask_from_seg_logits, predicted_class
 from ivcm.app.records import ImageRecord, selection_after_toggle, sort_key, sorted_records, top3
 from ivcm.app.render import overlay
@@ -232,6 +240,89 @@ def test_mask_from_seg_logits_resizes_to_original() -> None:
     # Nearest-neighbour upsample: the top-left quadrant is foreground, the rest background.
     assert mask[0, 0] == 1
     assert mask[3, 3] == 0
+
+
+def test_map_to_mask_center_margins_and_corners() -> None:
+    # No letter-boxing: the displayed image fills the label.
+    assert map_to_mask((50.0, 50.0), (100, 100), (100, 100), (100, 100)) == (50, 50)
+    # The far bottom-right corner clamps to the last pixel, not one past it.
+    assert map_to_mask((99.9, 99.9), (100, 100), (100, 100), (100, 100)) == (99, 99)
+    # Horizontal letter-boxing (label wider than the image): the side margins map to nothing.
+    assert map_to_mask((5.0, 50.0), (100, 100), (120, 100), (100, 100)) is None
+    assert map_to_mask((115.0, 50.0), (100, 100), (120, 100), (100, 100)) is None
+
+
+def test_map_to_mask_non_square_letterboxes_on_the_other_axis() -> None:
+    # A wide image (100x50 displayed) in a square label letter-boxes top/bottom (offset_y = 25).
+    assert map_to_mask((50.0, 25.0), (100, 50), (100, 100), (50, 100)) == (0, 50)
+    assert map_to_mask((50.0, 10.0), (100, 50), (100, 100), (50, 100)) is None
+
+
+def test_stamp_disk_paints_erases_and_clips() -> None:
+    mask = np.zeros((10, 10), dtype=np.uint8)
+    stamp_disk(mask, 5, 5, 2, 1)
+    assert mask[5, 5] == 1
+    assert mask[5, 7] == 1  # distance 2 <= radius 2
+    assert mask[5, 8] == 0  # distance 3 > radius 2
+
+    stamp_disk(mask, 5, 5, 2, 0)
+    assert mask.sum() == 0  # fully erased
+
+    stamp_disk(mask, 0, 0, 3, 1)  # centered at the corner: clipped to bounds, no error
+    assert mask[0, 0] == 1
+
+
+def test_stamp_stroke_leaves_no_gap() -> None:
+    mask = np.zeros((5, 30), dtype=np.uint8)
+    stamp_stroke(mask, (2, 2), (2, 27), 1, 1)
+    # The whole center line between the endpoints is painted: a fast drag skips no pixel.
+    assert (mask[2, 2:28] == 1).all()
+
+
+def test_raise_slider_to_floor() -> None:
+    assert raise_slider_to_floor(20, 50) == 50  # below the floor is raised
+    assert raise_slider_to_floor(70, 50) == 70  # above the floor is left alone
+    assert raise_slider_to_floor(50, 50) == 50  # at the floor is unchanged
+
+
+def test_mask_changed_detects_any_difference() -> None:
+    a = np.zeros((3, 3), dtype=np.uint8)
+    b = np.zeros((3, 3), dtype=np.uint8)
+    assert mask_changed(a, b) is False
+    b[1, 1] = 1
+    assert mask_changed(a, b) is True
+
+
+def test_edit_history_undo_redo_and_branch_truncation() -> None:
+    history = EditHistory(np.zeros((2, 2), dtype=np.uint8))
+    assert not history.can_undo() and not history.can_redo()
+
+    s1 = np.zeros((2, 2), dtype=np.uint8)
+    s1[0, 0] = 1
+    s2 = np.zeros((2, 2), dtype=np.uint8)
+    s2[1, 1] = 1
+    history.push(s1)
+    history.push(s2)
+    assert history.can_undo() and not history.can_redo()
+
+    np.testing.assert_array_equal(history.undo(), s1)
+    assert history.can_redo()
+    np.testing.assert_array_equal(history.redo(), s2)
+
+    # A push after an undo drops the redo branch — the undone future is not recoverable.
+    history.undo()  # back to s1
+    s3 = np.zeros((2, 2), dtype=np.uint8)
+    s3[0, 1] = 1
+    history.push(s3)
+    assert not history.can_redo()
+    np.testing.assert_array_equal(history.current(), s3)
+
+
+def test_edit_history_returns_independent_copies() -> None:
+    history = EditHistory(np.zeros((2, 2), dtype=np.uint8))
+    snapshot = history.current()
+    snapshot[0, 0] = 1  # mutating a returned mask must not corrupt the stored state
+    np.testing.assert_array_equal(history.current(), np.zeros((2, 2), dtype=np.uint8))
 
 
 def test_app_icon_is_packaged_and_square() -> None:

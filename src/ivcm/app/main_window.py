@@ -7,28 +7,37 @@ from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+import numpy as np
 from PySide6.QtCore import QModelIndex, QSize, Qt
-from PySide6.QtGui import QAction, QCloseEvent
+from PySide6.QtGui import QAction, QCloseEvent, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
     QFileDialog,
+    QFrame,
     QHBoxLayout,
     QHeaderView,
     QLabel,
     QMainWindow,
+    QMessageBox,
     QProgressDialog,
+    QPushButton,
+    QSlider,
+    QStackedWidget,
+    QStyle,
     QTableView,
     QToolBar,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
 
 from ivcm.app.batch import process_directory
+from ivcm.app.editing import EditHistory, mask_changed, raise_slider_to_floor
 from ivcm.app.inference import InferenceEngine, load_image
-from ivcm.app.mask_slider import alpha_from_slider, make_mask_slider
+from ivcm.app.mask_slider import alpha_from_slider, make_mask_slider, slider_from_alpha
 from ivcm.app.overlay_dialog import OverlayDialog
-from ivcm.app.qtimage import record_pixmap
+from ivcm.app.preview import PREVIEW_MAX, EditablePreview
 from ivcm.app.records import ImageRecord, selection_after_toggle, sort_key, top3
 from ivcm.app.summary_panel import SummaryPanel
 from ivcm.app.table_model import ResultsTableModel
@@ -36,7 +45,13 @@ from ivcm.app.top3_window import Top3Window
 
 log = logging.getLogger(__name__)
 
-_PREVIEW = 500  # max side length of the side preview
+_PREVIEW = PREVIEW_MAX  # max side length of the side preview
+
+# Brush-size slider: radius in display pixels. The minimum paints roughly a single pixel; the
+# maximum is deliberately small so the brush stays a detail tool.
+_BRUSH_MIN = 1
+_BRUSH_MAX = 8
+_BRUSH_DEFAULT = 2
 
 # Fixed launch widths (px) for the left table's columns: a narrow checkbox column, a name column
 # sized for typical filenames (long names are ellided, not widened), and content-width metrics.
@@ -54,6 +69,13 @@ class MainWindow(QMainWindow):
         self.engine = engine
         self.records: list[ImageRecord] = []
 
+        # Mask-editing state (see the "editing mode" methods). The preview widget owns the working
+        # mask while editing; the main window holds only the surrounding session state.
+        self._editing = False
+        self._edit_record: ImageRecord | None = None
+        self._original_mask: np.ndarray | None = None
+        self._history: EditHistory | None = None
+
         self.model = ResultsTableModel(self.records, self._on_toggle)
         self.table = QTableView()
         self.table.setModel(self.model)
@@ -64,23 +86,26 @@ class MainWindow(QMainWindow):
         self.table.selectionModel().currentRowChanged.connect(self._on_current_changed)
         self._configure_columns()
 
-        self.preview = QLabel("Select an image")
-        self.preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.preview.setMinimumWidth(_PREVIEW)
+        self.preview = EditablePreview(engine.config)
+        self.preview.edit_started.connect(self._on_edit_started)
+        self.preview.stroke_committed.connect(self._on_stroke_committed)
 
         # Mask slider beneath the preview; controls only this window's preview (independent of
-        # the top-3 window's slider).
+        # the top-3 window's slider). It doubles as the "blender" during an edit.
         self.mask_slider = make_mask_slider(engine.config, self._on_mask_alpha_changed)
 
         # Summary of the checked images, above the preview; its height is fixed by its own rows,
         # so the preview keeps the rest of the pane.
         self.summary_panel = SummaryPanel()
 
+        self._controls = self._build_edit_controls()
+
         right_pane = QWidget()
         right_layout = QVBoxLayout(right_pane)
         right_layout.addWidget(self.summary_panel)
         right_layout.addWidget(self.preview)
         right_layout.addWidget(self.mask_slider, alignment=Qt.AlignmentFlag.AlignHCenter)
+        right_layout.addWidget(self._controls, alignment=Qt.AlignmentFlag.AlignHCenter)
 
         central = QWidget()
         layout = QHBoxLayout(central)
@@ -92,6 +117,7 @@ class MainWindow(QMainWindow):
         self.top3_window.remove_requested.connect(self._on_remove_from_top3)
 
         self._build_toolbar()
+        self._update_preview()  # nothing selected yet: placeholder, Edit + blender disabled
         self.resize(self._initial_size())
 
     def _configure_columns(self) -> None:
@@ -125,6 +151,7 @@ class MainWindow(QMainWindow):
 
     def _build_toolbar(self) -> None:
         toolbar = QToolBar()
+        self.toolbar = toolbar  # kept so editing mode can grey out the "top menu"
         self.addToolBar(toolbar)
 
         open_action = QAction("Choose / switch directory", self)
@@ -138,6 +165,109 @@ class MainWindow(QMainWindow):
         quit_action = QAction("Quit", self)
         quit_action.triggered.connect(QApplication.quit)
         toolbar.addAction(quit_action)
+
+    def _build_edit_controls(self) -> QStackedWidget:
+        """The Edit-button ⇄ edit-toolbar container shown under the preview.
+
+        Page 0 is the plain "Edit" button (non-editing); page 1 is the compact icon toolbar shown
+        while editing, with three groups: Keep / Discard, Undo / Redo, and the brush-size control
+        (a brush icon plus a slider).
+        """
+        stack = QStackedWidget()
+
+        # Page 0: the Edit button.
+        normal = QWidget()
+        normal_layout = QHBoxLayout(normal)
+        normal_layout.setContentsMargins(0, 0, 0, 0)
+        self._edit_button = QPushButton("Edit")
+        self._edit_button.setEnabled(False)  # enabled once a row is selected
+        self._edit_button.clicked.connect(self._enter_edit)
+        normal_layout.addWidget(self._edit_button)
+
+        # Page 1: the editing toolbar.
+        editing = QWidget()
+        edit_layout = QHBoxLayout(editing)
+        edit_layout.setContentsMargins(0, 0, 0, 0)
+
+        # "Keep" commits the mask in memory (not to disk), so it uses an apply/checkmark icon.
+        self._keep_button = self._icon_button(
+            "dialog-ok-apply", QStyle.StandardPixmap.SP_DialogApplyButton, "Keep", self._keep_edit
+        )
+        self._discard_button = self._icon_button(
+            "edit-delete", QStyle.StandardPixmap.SP_DialogDiscardButton, "Discard", self._discard_edit
+        )
+        self._undo_button = self._icon_button("edit-undo", QStyle.StandardPixmap.SP_ArrowBack, "Undo", self._undo_edit)
+        self._redo_button = self._icon_button(
+            "edit-redo", QStyle.StandardPixmap.SP_ArrowForward, "Redo", self._redo_edit
+        )
+
+        self._brush_slider = QSlider(Qt.Orientation.Horizontal)
+        self._brush_slider.setRange(_BRUSH_MIN, _BRUSH_MAX)
+        self._brush_slider.setValue(_BRUSH_DEFAULT)
+        self._brush_slider.setFixedWidth(100)
+        self._brush_slider.setToolTip("Brush size")
+        self._brush_slider.valueChanged.connect(self._on_brush_changed)
+
+        edit_layout.addWidget(self._keep_button)
+        edit_layout.addWidget(self._discard_button)
+        edit_layout.addWidget(self._separator())
+        edit_layout.addWidget(self._undo_button)
+        edit_layout.addWidget(self._redo_button)
+        edit_layout.addWidget(self._separator())
+        edit_layout.addWidget(self._brush_icon_label())
+        edit_layout.addWidget(self._brush_slider)
+
+        stack.addWidget(normal)  # index 0
+        stack.addWidget(editing)  # index 1
+        return stack
+
+    def _icon_button(
+        self, theme: str, fallback: QStyle.StandardPixmap, tip: str, on_click: Callable[[], None]
+    ) -> QToolButton:
+        """A small icon tool button, preferring a themed icon and falling back to a standard pixmap."""
+        icon = QIcon.fromTheme(theme)
+        if icon.isNull():
+            icon = self.style().standardIcon(fallback)
+        button = QToolButton()
+        button.setIcon(icon)
+        button.setToolTip(tip)
+        button.clicked.connect(on_click)
+        return button
+
+    def _brush_icon_label(self) -> QLabel:
+        """A small brush icon beside the brush slider so the slider's purpose is obvious.
+
+        Prefers a themed brush icon; falls back to a drawn filled-circle "dot" so it still shows on
+        platforms without an icon theme (e.g. macOS).
+        """
+        size = 16
+        icon = QIcon.fromTheme("draw-brush")
+        if icon.isNull():
+            icon = QIcon.fromTheme("tool-brush")
+        label = QLabel()
+        label.setPixmap(icon.pixmap(size, size) if not icon.isNull() else self._brush_dot_pixmap(size))
+        label.setToolTip("Brush size")
+        return label
+
+    @staticmethod
+    def _brush_dot_pixmap(size: int) -> QPixmap:
+        pixmap = QPixmap(size, size)
+        pixmap.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(Qt.GlobalColor.gray)
+        margin = size // 4
+        painter.drawEllipse(margin, margin, size - 2 * margin, size - 2 * margin)
+        painter.end()
+        return pixmap
+
+    @staticmethod
+    def _separator() -> QFrame:
+        line = QFrame()
+        line.setFrameShape(QFrame.Shape.VLine)
+        line.setFrameShadow(QFrame.Shadow.Sunken)
+        return line
 
     def closeEvent(self, event: QCloseEvent) -> None:
         # The top-3 window is a separate top-level window; close it too so closing the main
@@ -267,26 +397,134 @@ class MainWindow(QMainWindow):
             return
         self.table.setCurrentIndex(self.model.index(target, 1))
 
-    def _on_mask_alpha_changed(self, _value: int) -> None:
-        self._update_preview()
+    def _on_mask_alpha_changed(self, value: int) -> None:
+        # While editing, the slider is the blender for the in-progress mask: re-render from the
+        # working mask rather than the saved record (which would drop the edit).
+        if self._editing:
+            self.preview.set_alpha(alpha_from_slider(value))
+        else:
+            self._update_preview()
 
     def _update_preview(self) -> None:
         record = self._current_record()
         if record is None:
             self.preview.setText("Select an image")
+            self._edit_button.setEnabled(False)
+            self.mask_slider.setEnabled(False)  # the blender does nothing with no image showing
             return
-        alpha = alpha_from_slider(self.mask_slider.value())
-        pixmap = record_pixmap(record, self.engine.config, alpha)
-        self.preview.setPixmap(
-            pixmap.scaled(
-                _PREVIEW,
-                _PREVIEW,
-                Qt.AspectRatioMode.KeepAspectRatio,
-                Qt.TransformationMode.SmoothTransformation,
-            )
-        )
+        self._edit_button.setEnabled(True)
+        self.mask_slider.setEnabled(True)
+        self.preview.display(record, self.engine.config, alpha_from_slider(self.mask_slider.value()))
 
     def _open_large(self, index: QModelIndex) -> None:
         if not index.isValid() or not (0 <= index.row() < len(self.records)):
             return
         OverlayDialog(self.records[index.row()], self.engine.config, self).exec()
+
+    # --- mask editing ----------------------------------------------------
+
+    def _enter_edit(self) -> None:
+        """Start editing the selected record's mask (works for any selected image)."""
+        record = self._current_record()
+        if record is None:
+            return
+        image = load_image(record.path)
+        if record.mask is not None:
+            working = record.mask.copy()
+        else:
+            working = np.zeros((int(image.shape[0]), int(image.shape[1])), dtype=np.uint8)
+
+        self._editing = True
+        self._edit_record = record
+        self._original_mask = working.copy()
+        self._history = EditHistory(working)
+        alpha = alpha_from_slider(self.mask_slider.value())
+        self.preview.begin_edit(image, working, alpha, float(self._brush_slider.value()))
+        self._set_ui_frozen(True)
+        self._controls.setCurrentIndex(1)
+        self._refresh_undo_redo()
+
+    def _set_ui_frozen(self, frozen: bool) -> None:
+        """Grey out (or restore) everything but the preview, blender, and edit toolbar."""
+        self.table.setEnabled(not frozen)
+        self.toolbar.setEnabled(not frozen)
+        self.top3_window.setEnabled(not frozen)
+
+    def _on_edit_started(self) -> None:
+        """First press of a stroke: raise the blender to at least 0.5 so the mask is visible."""
+        floor = slider_from_alpha(0.5)
+        self.mask_slider.setValue(raise_slider_to_floor(self.mask_slider.value(), floor))
+
+    def _on_stroke_committed(self) -> None:
+        """A stroke that changed the mask ended: record one undo-history entry."""
+        if self._history is None:
+            return
+        working = self.preview.working_mask()
+        if working is not None:
+            self._history.push(working)
+            self._refresh_undo_redo()
+
+    def _on_brush_changed(self, value: int) -> None:
+        self.preview.set_brush_radius(float(value))
+
+    def _undo_edit(self) -> None:
+        if self._history is None:
+            return
+        self.preview.set_working_mask(self._history.undo())
+        self._refresh_undo_redo()
+
+    def _redo_edit(self) -> None:
+        if self._history is None:
+            return
+        self.preview.set_working_mask(self._history.redo())
+        self._refresh_undo_redo()
+
+    def _refresh_undo_redo(self) -> None:
+        self._undo_button.setEnabled(self._history is not None and self._history.can_undo())
+        self._redo_button.setEnabled(self._history is not None and self._history.can_redo())
+
+    def _keep_edit(self) -> None:
+        """Commit the working mask in memory: metrics first (so a failure leaves the record intact)."""
+        record = self._edit_record
+        working = self.preview.working_mask()
+        if record is None or working is None:
+            return
+        try:
+            metrics = self.engine.morphometry(working)
+        except Exception:
+            log.exception("Morphometry failed for %s", record.name)
+            self.statusBar().showMessage(f"Morphometry failed for {record.name}; edit left open.")
+            return  # stay in edit mode; the doctor's mask is preserved
+        record.metrics = metrics
+        record.mask = working
+        record.is_nerve = True
+        self._exit_edit()
+        self._resort_and_refresh(lambda recs: recs.index(record))
+
+    def _discard_edit(self) -> None:
+        """Discard the working mask, confirming first if it differs from the edit-start mask."""
+        working = self.preview.working_mask()
+        if working is not None and self._original_mask is not None and mask_changed(working, self._original_mask):
+            # Custom button text: a standard Discard button is relabelled "Don't Save" on macOS,
+            # so the dialog reads exactly "Cancel" / "Discard".
+            box = QMessageBox(self)
+            box.setIcon(QMessageBox.Icon.Warning)
+            box.setWindowTitle("Discard edits?")
+            box.setText("Discard your changes to this mask?")
+            discard_button = box.addButton("Discard", QMessageBox.ButtonRole.DestructiveRole)
+            cancel_button = box.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
+            box.setDefaultButton(cancel_button)
+            box.exec()
+            if box.clickedButton() is not discard_button:
+                return
+        self._exit_edit()
+        self._update_preview()  # re-render from the unchanged record
+
+    def _exit_edit(self) -> None:
+        self._editing = False
+        self.preview.end_edit()
+        self._set_ui_frozen(False)
+        self._controls.setCurrentIndex(0)
+        self._edit_record = None
+        self._original_mask = None
+        self._history = None

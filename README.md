@@ -54,8 +54,11 @@ the overlay on the side; above that preview a compact panel summarises the check
 count, plus a small distribution strip per metric (over a `0`-to-max axis) marking the mean, ±1 SD,
 and min/max, with the exact numbers on hover. Double-click / Enter opens an image large in a
 blocking window. A second window stays in sync showing the top-3 checked images with their metrics.
-Checking a non-nerve image segments it on the spot; everything is preconfigured except the
-directory.
+Checking a non-nerve image segments it on the spot. **Edit** under the preview opens an in-place mask
+editor — paint with the left mouse button, erase with the right, adjust the brush size, and undo/redo
+per stroke, with **Keep** / **Discard** icons (the rest of the UI is frozen during an edit). Keep
+recomputes that image's metrics, marks it a nerve, and re-sorts its row; Discard reverts (asking to
+confirm if the mask changed). Everything is preconfigured except the directory.
 
 ```bash
 uv sync --extra ui          # install the UI dependency
