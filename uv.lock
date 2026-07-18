@@ -677,6 +677,7 @@ dependencies = [
     { name = "albumentations" },
     { name = "hydra-core" },
     { name = "lightning" },
+    { name = "monai" },
     { name = "nibabel" },
     { name = "pillow" },
     { name = "rich" },
@@ -707,6 +708,7 @@ requires-dist = [
     { name = "albumentations" },
     { name = "hydra-core" },
     { name = "lightning" },
+    { name = "monai" },
     { name = "nibabel" },
     { name = "pillow" },
     { name = "pyside6", marker = "extra == 'ui'" },
@@ -868,6 +870,19 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/d6/54/cfe61301667036ec958cb99bd3efefba235e65cdeb9c84d24a8293ba1d90/mdurl-0.1.2.tar.gz", hash = "sha256:bb413d29f5eea38f31dd4754dd7377d4465116fb207585f97bf925588687c1ba", size = 8729, upload-time = "2022-08-14T12:40:10.846Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/b3/38/89ba8ad64ae25be8de66a6d463314cf1eb366222074cfda9ee839c56a4b4/mdurl-0.1.2-py3-none-any.whl", hash = "sha256:84008a41e51615a49fc9966191ff91509e3c40b939176e643fd50a5c2196b8f8", size = 9979, upload-time = "2022-08-14T12:40:09.779Z" },
+]
+
+[[package]]
+name = "monai"
+version = "1.6.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy" },
+    { name = "torch" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/f4/ac/b14b7bcc888526537698c5f4ff49354eb19bec74dcc30d7e73881a3839a8/monai-1.6.0.tar.gz", hash = "sha256:eded72f0a73531abb6887b9473b081a42c78ec8c80dc5f2da43df159da265b9b", size = 1275977, upload-time = "2026-06-22T16:47:51.668Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/74/34/7c86652d06062d97bf30752ee5b77d68c78ea984210f1c28848fc1afcef0/monai-1.6.0-202606221745-py3-none-any.whl", hash = "sha256:8880fb294827448a15299f9313b96c057d87179a4efe7ae0c80085f21ec494ea", size = 1612831, upload-time = "2026-06-22T16:47:49.049Z" },
 ]
 
 [[package]]

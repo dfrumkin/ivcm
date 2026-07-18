@@ -51,7 +51,7 @@ def _read_volume(path: Path) -> tuple[np.ndarray, np.ndarray]:
     return np.asarray(img.dataobj), np.asarray(img.affine)
 
 
-def _compose_cfg(images_path: Path | str, masks_path: Path | str, *, n_folds: int, image_size: int) -> DictConfig:
+def _compose_cfg(images_path: Path | str, masks_path: Path | str, *, n_folds: int, crop_size: int) -> DictConfig:
     with initialize_config_dir(config_dir=CONFIGS_DIR, version_base=None):
         return compose(
             config_name="cv",
@@ -60,7 +60,7 @@ def _compose_cfg(images_path: Path | str, masks_path: Path | str, *, n_folds: in
                 f"data.masks_path={masks_path}",
                 f"data.n_folds={n_folds}",
                 "data.batch_size=2",
-                f"image_size={image_size}",
+                f"crop_size={crop_size}",
             ],
         )
 
@@ -100,7 +100,7 @@ def test_assembles_full_oof_volume(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     _write_volume(images_path, rng.integers(0, 256, (h, w, n_slices), dtype=np.uint8))
     _write_volume(masks_path, rng.integers(0, 2, (h, w, n_slices), dtype=np.uint8))
 
-    cfg = _compose_cfg(images_path, masks_path, n_folds=n_folds, image_size=16)
+    cfg = _compose_cfg(images_path, masks_path, n_folds=n_folds, crop_size=32)
     cv_dir = tmp_path / "cv"
     _make_cv_dir(cv_dir, cfg, n_folds=n_folds, cwd=tmp_path)
 
@@ -108,7 +108,9 @@ def test_assembles_full_oof_volume(tmp_path: Path, monkeypatch: pytest.MonkeyPat
 
     assert out_path == cv_dir / "predictions.nii"
     pred, affine = _read_volume(out_path)
-    assert pred.shape == (h, w, n_slices)  # restored to GT resolution, not image_size (16)
+    # Native (= GT) resolution: sliding-window inference over the small slices (MONAI pads up to
+    # the 32 ROI, then crops the output back), so the mask is already at GT H×W — no resize back.
+    assert pred.shape == (h, w, n_slices)
     assert pred.dtype == np.uint8
     assert set(np.unique(pred).tolist()).issubset({0, 1})
     assert np.allclose(affine, AFFINE)  # GT affine preserved
@@ -127,7 +129,7 @@ def test_relative_data_paths_resolved_against_saved_cwd(tmp_path: Path, monkeypa
 
     assert _resolve_data_path(str(images_rel), data_root) == data_root / images_rel
 
-    cfg = _compose_cfg(images_rel, masks_rel, n_folds=n_folds, image_size=8)
+    cfg = _compose_cfg(images_rel, masks_rel, n_folds=n_folds, crop_size=32)
     cv_dir = tmp_path / "cv"
     _make_cv_dir(cv_dir, cfg, n_folds=n_folds, cwd=data_root)
 
@@ -153,7 +155,7 @@ def test_cli_tolerates_hydra_only_interpolation(
     _write_volume(images_path, rng.integers(0, 256, (h, w, n_slices), dtype=np.uint8))
     _write_volume(masks_path, rng.integers(0, 2, (h, w, n_slices), dtype=np.uint8))
 
-    cfg = _compose_cfg(images_path, masks_path, n_folds=n_folds, image_size=8)
+    cfg = _compose_cfg(images_path, masks_path, n_folds=n_folds, crop_size=32)
     assert "${hydra:" in OmegaConf.to_yaml(cfg.logger, resolve=False)  # scenario is real
     cv_dir = tmp_path / "cv"
     _make_cv_dir(cv_dir, cfg, n_folds=n_folds, cwd=tmp_path)
@@ -192,11 +194,18 @@ def test_missing_checkpoint_raises(tmp_path: Path) -> None:
 
 
 class _SpyModel(nn.Module):
-    """Records the device of each forward input and returns zero logits of the right shape."""
+    """Records the device of each forward input and returns zero logits of the right shape.
 
-    def __init__(self, num_classes: int = 2) -> None:
+    Carries the sliding-window attributes ``_predict_fold`` reads off the model (roi_size /
+    sw_overlap / sw_batch_size), standing in for a real ``SegmentationModule``.
+    """
+
+    def __init__(self, num_classes: int = 2, roi_size: int = 5) -> None:
         super().__init__()
         self.num_classes = num_classes
+        self.roi_size = roi_size
+        self.sw_overlap = 0.25
+        self.sw_batch_size = 2
         self.seen: list[torch.device] = []
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -207,7 +216,7 @@ class _SpyModel(nn.Module):
 
 def test_predict_fold_moves_batch_to_device_and_returns_numpy() -> None:
     """The batch is moved to the passed device before the forward pass, and the result is a
-    CPU uint8 NumPy array of shape (len(val_idx), H, W) at original resolution."""
+    CPU uint8 NumPy array of shape (len(val_idx), H, W) at native (= GT) resolution."""
     device = torch.device("cpu")
     h, w, n_slices = 8, 6, 4
     rng = np.random.default_rng(3)
@@ -217,9 +226,9 @@ def test_predict_fold_moves_batch_to_device_and_returns_numpy() -> None:
     spy = _SpyModel()
     spy.to(device)
 
-    preds = _predict_fold(cast(SegmentationModule, spy), images, masks, val_idx, size=5, batch_size=2, device=device)
+    preds = _predict_fold(cast(SegmentationModule, spy), images, masks, val_idx, batch_size=2, device=device)
 
     assert spy.seen and all(d == device for d in spy.seen)  # .to(device) happened pre-forward
     assert isinstance(preds, np.ndarray)
-    assert preds.shape == (n_slices, h, w)  # restored to original H, W (not size=5)
+    assert preds.shape == (n_slices, h, w)  # native H, W (sliding window over the full slice)
     assert preds.dtype == np.uint8

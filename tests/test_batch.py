@@ -82,8 +82,12 @@ def _stub_engine(size: int = 8, batch_size: int = 2) -> InferenceEngine:
     engine = InferenceEngine.__new__(InferenceEngine)
     engine.device = torch.device("cpu")
     engine.cls_size = size
-    engine.seg_size = size
     engine.nerve_index = 1
+    # Segmentation runs via sliding-window inference; the stub carries the window params
+    # normally read off the loaded SegmentationModule.
+    engine.seg_roi = size
+    engine.seg_overlap = 0.25
+    engine.seg_sw_batch = batch_size
     engine._cls_model = _StubClsModel().eval()  # pyright: ignore[reportPrivateUsage]
     engine._seg_model = _StubSegModel().eval()  # pyright: ignore[reportPrivateUsage]
     engine.config = SimpleNamespace(batch_size=batch_size)  # type: ignore[assignment]
@@ -105,6 +109,22 @@ def test_classify_and_segment_batch_match_single_image() -> None:
             assert engine.classify_batch(images, ex) == expected_flags
             for batched, single in zip(engine.segment_batch(images, ex), expected_masks, strict=True):
                 np.testing.assert_array_equal(batched, single)
+
+
+def test_segment_batch_handles_mixed_native_sizes() -> None:
+    """Segmentation runs at native resolution, so ``segment_batch`` must handle differently-sized
+    images (no stacking) — each mask comes back at its own H×W and matches per-image ``segment``."""
+    engine = _stub_engine(size=8, batch_size=2)
+    rng = np.random.default_rng(1)
+    shapes = [(8, 8), (10, 6), (12, 12), (5, 9)]  # differ in H and W; some below the ROI (8)
+    images = [rng.random((h, w, 1), dtype=np.float32) for h, w in shapes]
+
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        for ex in (None, executor):
+            masks = engine.segment_batch(images, ex)
+            assert [m.shape for m in masks] == shapes  # each at its own native size
+            for batched, image in zip(masks, images, strict=True):
+                np.testing.assert_array_equal(batched, engine.segment(image))
 
 
 # --- orchestration -------------------------------------------------------

@@ -3,8 +3,15 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from typing import cast
 
 import torch
+
+# sliding_window_inference is re-exported by monai.inferers at runtime but pyright resolves it to
+# the private submodule and its signature is only partially typed; suppress both at the boundary.
+from monai.inferers import (
+    sliding_window_inference,  # pyright: ignore[reportPrivateImportUsage, reportUnknownVariableType]  # noqa: E501
+)
 from torch import nn
 from torchmetrics.classification import (
     BinaryAUROC,
@@ -15,6 +22,34 @@ from torchmetrics.classification import (
 from torchmetrics.segmentation import DiceScore, MeanIoU
 
 from ivcm.models.base import BaseModule, Batch
+
+
+def sliding_window_logits(
+    predictor: Callable[[torch.Tensor], torch.Tensor],
+    images: torch.Tensor,
+    roi_size: int,
+    overlap: float,
+    sw_batch_size: int,
+) -> torch.Tensor:
+    """Full-image segmentation logits via MONAI sliding-window inference.
+
+    Tiles ``images`` (``(B, C, H, W)``, native resolution) into ``roi_size`` windows, runs
+    ``predictor`` on each (in batches of ``sw_batch_size``), and stitches the per-window logits
+    back into a ``(B, num_classes, H, W)`` map, averaging in overlap regions. Windows extending
+    past the border are padded by MONAI, so ``images`` smaller than ``roi_size`` also work.
+
+    ``predictor`` is any callable returning ``(N, num_classes, h, w)`` logits (not necessarily a
+    ``SegmentationModule``), so this is unit-testable with a stub. The scalar ``roi_size`` is
+    broadcast to the 2D ``(roi_size, roi_size)`` window MONAI expects.
+    """
+    logits = sliding_window_inference(
+        inputs=images,
+        roi_size=(roi_size, roi_size),
+        sw_batch_size=sw_batch_size,
+        predictor=predictor,
+        overlap=overlap,
+    )
+    return cast(torch.Tensor, logits)
 
 
 class SegmentationModule(BaseModule):
@@ -34,8 +69,19 @@ class SegmentationModule(BaseModule):
         optimizer: Callable[..., torch.optim.Optimizer],
         num_classes: int,
         scheduler: Callable[..., torch.optim.lr_scheduler.LRScheduler] | None = None,
+        roi_size: int = 192,
+        sw_overlap: float = 0.25,
+        sw_batch_size: int = 4,
     ) -> None:
         super().__init__(net=net, criterion=criterion, optimizer=optimizer, scheduler=scheduler)
+        # Sliding-window inference parameters. Training runs a direct forward on ``roi_size``
+        # crops; validation/prediction slide a ``roi_size`` window over the full-resolution
+        # image (see ``sliding_window_logits``). Defaults let a config that omits these keys
+        # still instantiate — but a pre-change (resize-trained) checkpoint is not made correct
+        # by them; those runs predate crop training.
+        self.roi_size = roi_size
+        self.sw_overlap = sw_overlap
+        self.sw_batch_size = sw_batch_size
         # Dice/IoU exclude background and consume integer (B, H, W) preds/targets directly.
         # (Kwargs are inlined rather than packed into a dict so each keyword keeps its precise
         # type — a heterogeneous dict would widen them to `int | str` and fail the metric sigs.)
@@ -63,17 +109,28 @@ class SegmentationModule(BaseModule):
         # AUPRC (average precision): the best-checkpoint selection metric (val/auprc).
         self.val_auprc = BinaryAveragePrecision()
 
-    def _step(self, batch: Batch) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    def _step(
+        self,
+        batch: Batch,
+        logits_fn: Callable[[torch.Tensor], torch.Tensor],
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Shared loss/metric extraction. ``logits_fn`` maps images to ``(B, C, H, W)`` logits:
+        a direct forward in training (inputs are already ``roi_size`` crops), a sliding-window
+        forward in validation (inputs are full native-resolution images)."""
         images, masks = batch
         masks = masks.long()  # Dice/CE losses and the metrics require integer targets.
-        logits = self(images)  # (B, C, H, W)
+        logits = logits_fn(images)  # (B, C, H, W)
         loss = self.criterion(logits, masks)
         preds = logits.argmax(dim=1)
         fg_prob = logits.softmax(dim=1)[:, 1]  # foreground (nerve) probability, (B, H, W)
         return loss, preds, fg_prob, masks
 
+    def _sliding_window_logits(self, images: torch.Tensor) -> torch.Tensor:
+        """Full-image logits via sliding-window inference over ``roi_size`` windows."""
+        return sliding_window_logits(self.forward, images, self.roi_size, self.sw_overlap, self.sw_batch_size)
+
     def training_step(self, batch: Batch, batch_idx: int) -> torch.Tensor:
-        loss, preds, _fg_prob, masks = self._step(batch)
+        loss, preds, _fg_prob, masks = self._step(batch, self.forward)
         self.train_iou(preds, masks)
         self.train_dice(preds, masks)
         self.log("train/loss", loss, prog_bar=True, on_step=False, on_epoch=True)
@@ -82,7 +139,7 @@ class SegmentationModule(BaseModule):
         return loss
 
     def validation_step(self, batch: Batch, batch_idx: int) -> torch.Tensor:
-        loss, preds, fg_prob, masks = self._step(batch)
+        loss, preds, fg_prob, masks = self._step(batch, self._sliding_window_logits)
         self.val_iou(preds, masks)
         self.val_dice(preds, masks)
         self.val_sensitivity(fg_prob, masks)

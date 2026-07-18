@@ -1,5 +1,10 @@
 _target_: ivcm.models.SegmentationModule
 num_classes: ${len:${class_names}}
+# Sliding-window inference parameters (used for validation, predict-cv, and app inference).
+# roi_size is the crop/window size; overlap and sw_batch_size are MONAI's defaults.
+roi_size: ${crop_size}
+sw_overlap: 0.25
+sw_batch_size: 4
 net:
   _target_: segmentation_models_pytorch.Unet
   encoder_name: resnet18

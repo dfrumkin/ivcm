@@ -1,17 +1,19 @@
 """Model loading and inference for the clinical-review UI (Qt-free).
 
 ``InferenceEngine`` loads both trained models in its constructor (not at import) and runs
-classification, segmentation, and morphometry. The class-index and mask-resize logic are split
-into small pure helpers (taking ready-made logits) so they are unit-testable without a
-checkpoint. All forward passes run under ``torch.inference_mode()``.
+classification, segmentation, and morphometry. The class-index and mask logic are split into
+small pure helpers (taking ready-made logits) so they are unit-testable without a checkpoint.
+All forward passes run under ``torch.inference_mode()``.
 
 Two flavours of inference coexist. The single-image ``classify`` / ``segment`` methods serve the
 interactive checkbox path (and the per-file fallback used by the directory batch). The batched
-``classify_batch`` / ``segment_batch`` methods serve the directory batch (``ivcm.app.batch``): they
-preprocess a list of images (optionally in parallel via a passed executor) into one stacked tensor
-and run the forward in device sub-batches, amortising per-launch overhead. Preprocessing in the
-batch path produces CPU tensors only; the per-sub-batch device transfer happens in
-``forward_in_chunks`` so worker threads never touch the device.
+``classify_batch`` / ``segment_batch`` methods serve the directory batch (``ivcm.app.batch``).
+Classification stacks a list of images (optionally preprocessed in parallel via a passed
+executor) into one tensor and runs the forward in device sub-batches, amortising per-launch
+overhead. Segmentation runs at each image's native resolution via sliding-window inference, so
+its batch path cannot stack differently-sized images — it runs each image individually (windows
+are batched internally by ``sw_batch_size``); decode/preprocess is still parallelised via the
+executor.
 """
 
 from __future__ import annotations
@@ -24,14 +26,14 @@ from typing import Any, cast
 
 import numpy as np
 import torch
-import torch.nn.functional as F
 from hydra.utils import instantiate
 from omegaconf import DictConfig, OmegaConf
 from PIL import Image
 from torch import nn
 
 from ivcm.app.config import AppConfig, ModelConfig
-from ivcm.data import build_eval_transform
+from ivcm.data import build_eval_transform, build_seg_eval_transform
+from ivcm.models.segmentation import SegmentationModule, sliding_window_logits
 from ivcm.morphometry import cell_morphometry
 from ivcm.utils import select_device
 
@@ -78,16 +80,15 @@ def forward_in_chunks(model: nn.Module, x: torch.Tensor, batch_size: int, device
     return torch.cat(outputs, dim=0)
 
 
-def mask_from_seg_logits(logits: torch.Tensor, orig_hw: tuple[int, int]) -> np.ndarray:
-    """Binary ``uint8`` mask from segmentation ``logits`` (``(1, C, h, w)``), resized to ``orig_hw``.
+def mask_from_seg_logits(logits: torch.Tensor) -> np.ndarray:
+    """Binary ``uint8`` mask from segmentation ``logits`` (``(1, C, H, W)``).
 
-    Mirrors ``predict.py::_predict_fold``: argmax over the class dim, then nearest-neighbour
-    resize back to the original resolution so labels stay discrete and morphometry measures in
-    original pixels.
+    Mirrors ``predict.py::_predict_fold``: argmax over the class dim. The logits come from
+    sliding-window inference over the full native-resolution image, so they are already at the
+    original resolution — no resize back, and morphometry measures in original pixels.
     """
-    preds = logits.argmax(dim=1)  # (1, h, w)
-    resized = F.interpolate(preds[:, None].float(), size=orig_hw, mode="nearest")
-    return resized[0, 0].to(torch.uint8).cpu().numpy()
+    preds = logits.argmax(dim=1)  # (1, H, W)
+    return preds[0].to(torch.uint8).cpu().numpy()
 
 
 def _transform_image(image: np.ndarray, size: int) -> torch.Tensor:
@@ -98,6 +99,16 @@ def _transform_image(image: np.ndarray, size: int) -> torch.Tensor:
     once per sub-batch in ``forward_in_chunks``.
     """
     out = cast("dict[str, torch.Tensor]", build_eval_transform(size)(image=image))
+    return out["image"]
+
+
+def _transform_seg_image(image: np.ndarray) -> torch.Tensor:
+    """Convert a single ``HWC`` image to a ``(1, H, W)`` **CPU** CHW tensor at native resolution.
+
+    Segmentation does not resize — the full-resolution image is fed to sliding-window inference.
+    Builds a fresh transform per call so no instance is shared across worker threads.
+    """
+    out = cast("dict[str, torch.Tensor]", build_seg_eval_transform()(image=image))
     return out["image"]
 
 
@@ -181,10 +192,17 @@ class InferenceEngine:
             )
 
         self.cls_size = _resolve_image_size(cls_cfg)
-        self.seg_size = _resolve_image_size(seg_cfg)
 
         self._cls_model = _load_model(cls_cfg, config.classification.ckpt_path(), self.device)
         self._seg_model = _load_model(seg_cfg, config.segmentation.ckpt_path(), self.device)
+
+        # Sliding-window inference parameters, read off the loaded SegmentationModule (its
+        # constructor supplies defaults, so a config that omits them still loads). Segmentation
+        # runs at native resolution — no seg image size to resolve.
+        seg_model = cast(SegmentationModule, self._seg_model)
+        self.seg_roi = seg_model.roi_size
+        self.seg_overlap = seg_model.sw_overlap
+        self.seg_sw_batch = seg_model.sw_batch_size
 
     def _preprocess(self, image: np.ndarray, size: int) -> torch.Tensor:
         """Resize/convert a single ``HWC`` image to a batched ``(1, 1, size, size)`` device tensor."""
@@ -216,27 +234,30 @@ class InferenceEngine:
         logits = forward_in_chunks(self._cls_model, x, self.config.batch_size, self.device)
         return [cls == self.nerve_index for cls in predicted_classes(logits)]
 
-    def segment(self, image: np.ndarray) -> np.ndarray:
-        """Binary nerve mask at the original image resolution."""
-        height, width = int(image.shape[0]), int(image.shape[1])
-        x = self._preprocess(image, self.seg_size)
+    def _segment_tensor(self, x: torch.Tensor) -> np.ndarray:
+        """Sliding-window segment one ``(1, 1, H, W)`` device tensor to a native-size uint8 mask."""
         with torch.inference_mode():
-            logits = cast(torch.Tensor, self._seg_model(x))
-        return mask_from_seg_logits(logits, (height, width))
+            logits = sliding_window_logits(self._seg_model, x, self.seg_roi, self.seg_overlap, self.seg_sw_batch)
+        return mask_from_seg_logits(logits)
+
+    def segment(self, image: np.ndarray) -> np.ndarray:
+        """Binary nerve mask at the original image resolution (via sliding-window inference)."""
+        x = _transform_seg_image(image).unsqueeze(0).to(self.device)
+        return self._segment_tensor(x)
 
     def segment_batch(self, images: Sequence[np.ndarray], executor: Executor | None = None) -> list[np.ndarray]:
         """Batched ``segment``: a binary nerve mask per image at its original resolution.
 
-        Preprocesses ``images`` (in parallel when ``executor`` is given) and runs segmentation in
-        ``config.batch_size`` device sub-batches; each mask is resized back to its own original size
-        (sizes differ, so this stays per image). ``images`` must be non-empty.
+        Native-resolution images may differ in size, so they cannot be stacked into one tensor;
+        each is run through sliding-window inference individually (its windows are batched
+        internally by ``sw_batch_size``). Decode/preprocess is parallelised via ``executor`` when
+        given. ``images`` must be non-empty.
         """
-        x = self._stack(images, self.seg_size, executor)
-        logits = forward_in_chunks(self._seg_model, x, self.config.batch_size, self.device)
-        return [
-            mask_from_seg_logits(logits[i : i + 1], (int(image.shape[0]), int(image.shape[1])))
-            for i, image in enumerate(images)
-        ]
+        if executor is None:
+            tensors: Iterable[torch.Tensor] = (_transform_seg_image(image) for image in images)
+        else:
+            tensors = executor.map(_transform_seg_image, images)
+        return [self._segment_tensor(t.unsqueeze(0).to(self.device)) for t in tensors]
 
     def morphometry(self, mask: np.ndarray) -> dict[str, float]:
         """Density / area / perimeter for a mask, using the configured morphometry constants."""

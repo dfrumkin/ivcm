@@ -25,15 +25,14 @@ from typing import cast
 import nibabel as nib
 import numpy as np
 import torch
-import torch.nn.functional as F
 from hydra.utils import instantiate
 from nibabel.nifti1 import Nifti1Image
 from omegaconf import DictConfig, OmegaConf
 from torch.utils.data import DataLoader
 
-from ivcm.data import NiiSegmentationDataset, build_eval_transform, contiguous_folds
+from ivcm.data import NiiSegmentationDataset, build_seg_eval_transform, contiguous_folds
 from ivcm.data.datamodules import Sample
-from ivcm.models.segmentation import SegmentationModule
+from ivcm.models.segmentation import SegmentationModule, sliding_window_logits
 from ivcm.utils import configure_logging, select_device
 
 # Kept under the original private name so existing tests that monkeypatch
@@ -116,30 +115,28 @@ def _predict_fold(
     images: np.ndarray,
     masks: np.ndarray,
     val_idx: np.ndarray,
-    size: int,
     batch_size: int,
     device: torch.device,
 ) -> np.ndarray:
-    """Predict a fold's validation slices, resized back to original resolution.
+    """Predict a fold's validation slices at native (= GT) resolution via sliding windows.
 
-    Returns a ``(len(val_idx), H, W)`` uint8 array in ``val_idx`` order (the ``shuffle=False``
-    loader yields slices in exactly that order), so the caller can place it with one
-    fancy-index write.
+    Feeds each full-resolution slice to ``sliding_window_logits`` (``roi_size``/overlap read off
+    ``model``), so the argmax mask is already at the GT resolution — no resize back. Returns a
+    ``(len(val_idx), H, W)`` uint8 array in ``val_idx`` order (the ``shuffle=False`` loader
+    yields slices in exactly that order), so the caller can place it with one fancy-index write.
     """
-    height, width = images.shape[0], images.shape[1]
-    dataset = NiiSegmentationDataset(images, masks, val_idx, transform=build_eval_transform(size))
+    dataset = NiiSegmentationDataset(images, masks, val_idx, transform=build_seg_eval_transform())
     loader: DataLoader[Sample] = DataLoader(dataset, batch_size=batch_size, shuffle=False)
 
     preds: list[np.ndarray] = []
     with torch.no_grad():
         for imgs, _masks in loader:
             imgs = imgs.to(device)  # dataloader yields CPU tensors; match the model's device
-            logits: torch.Tensor = model(imgs)  # (B, C, size, size)
-            batch_preds = logits.argmax(dim=1)  # (B, size, size)
-            # Nearest-neighbour back to the GT resolution keeps mask labels discrete.
-            resized = F.interpolate(batch_preds[:, None].float(), size=(height, width), mode="nearest")
-            resized = resized[:, 0].long().cpu()
-            preds.extend(slice_pred.astype(np.uint8) for slice_pred in resized.numpy())
+            logits = sliding_window_logits(
+                model.forward, imgs, model.roi_size, model.sw_overlap, model.sw_batch_size
+            )  # (B, C, H, W) at native resolution
+            batch_preds = logits.argmax(dim=1).to(torch.uint8).cpu()  # (B, H, W)
+            preds.extend(slice_pred for slice_pred in batch_preds.numpy())
 
     assert len(preds) == len(val_idx), f"predicted {len(preds)} slices for {len(val_idx)} val indices"
     return np.stack(preds)
@@ -167,11 +164,14 @@ def write_oof_predictions(cfg: DictConfig, cv_dir: Path) -> Path:
     gt = _load_nii(masks_path)
     masks = np.asarray(gt.dataobj)
 
-    size = int(cfg.data.size)
     batch_size = int(cfg.data.batch_size)
     n_folds = int(cfg.data.n_folds)
     n_slices = images.shape[2]
-    log.info("Volume: %s, size=%d, n_folds=%d, model=%s", masks.shape, size, n_folds, cfg.model._target_)
+    # Sliding-window ROI logged for provenance only; the value actually used is read off each
+    # loaded model (its own roi_size), so a config lacking model.roi_size still predicts (the
+    # loaded module falls back to its own default). 192 here just mirrors that module default.
+    roi_size = int(OmegaConf.select(cfg, "model.roi_size", default=192))
+    log.info("Volume: %s, roi_size=%d, n_folds=%d, model=%s", masks.shape, roi_size, n_folds, cfg.model._target_)
 
     folds = contiguous_folds(n_slices, n_folds)
     out = np.zeros(masks.shape, dtype=np.uint8)
@@ -181,7 +181,7 @@ def write_oof_predictions(cfg: DictConfig, cv_dir: Path) -> Path:
         ckpt = _find_best_ckpt(cv_dir / f"fold_{fold}")
         log.info("Fold %d: predicting %d slices from %s", fold, len(val_idx), ckpt.name)
         model = _load_fold_model(cfg, ckpt, device)
-        preds = _predict_fold(model, images, masks, val_idx, size, batch_size, device)
+        preds = _predict_fold(model, images, masks, val_idx, batch_size, device)
         out[:, :, val_idx] = np.transpose(preds, (1, 2, 0))
         filled[val_idx] = True
 

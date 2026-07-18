@@ -22,7 +22,7 @@ from nibabel.dataobj_images import DataobjImage
 from torch.utils.data import DataLoader, Dataset
 
 from ivcm.data.real import NiiSegmentationDataset, contiguous_folds
-from ivcm.data.transforms import build_d4_transform, build_eval_transform
+from ivcm.data.transforms import build_crop_transform, build_seg_eval_transform
 
 # A dataset sample is an (image, target) pair; the image is `Any` because it crosses the
 # untyped albumentations boundary, and the target is an int (classification) or array/tensor
@@ -93,7 +93,7 @@ class SegmentationCVDataModule(L.LightningDataModule):
         fold: int = 0,
         batch_size: int = 4,
         num_workers: int = 0,
-        size: int = 384,
+        crop_size: int = 192,
     ) -> None:
         super().__init__()
         if not 0 <= fold < n_folds:
@@ -104,7 +104,7 @@ class SegmentationCVDataModule(L.LightningDataModule):
         self.fold = fold
         self.batch_size = batch_size
         self.num_workers = num_workers
-        self.size = size
+        self.crop_size = crop_size
         self.train_dataset: NiiSegmentationDataset | None = None
         self.val_dataset: NiiSegmentationDataset | None = None
         # Exposed for tests / inspection.
@@ -123,12 +123,12 @@ class SegmentationCVDataModule(L.LightningDataModule):
         self.val_indices = folds[self.fold]
         self.train_indices = np.concatenate([f for i, f in enumerate(folds) if i != self.fold])
 
+        # Train on native-resolution crops; validate on full native-resolution slices (fed to
+        # sliding-window inference). All slices in one volume share H×W, so val still batches.
         self.train_dataset = NiiSegmentationDataset(
-            images, masks, self.train_indices, transform=build_d4_transform(self.size)
+            images, masks, self.train_indices, transform=build_crop_transform(self.crop_size)
         )
-        self.val_dataset = NiiSegmentationDataset(
-            images, masks, self.val_indices, transform=build_eval_transform(self.size)
-        )
+        self.val_dataset = NiiSegmentationDataset(images, masks, self.val_indices, transform=build_seg_eval_transform())
 
     def train_dataloader(self) -> DataLoader[Sample]:
         assert self.train_dataset is not None, "call setup() before requesting a dataloader"

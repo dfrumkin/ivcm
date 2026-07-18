@@ -7,8 +7,15 @@ defaults:
   - callbacks: none
 
 seed: 42
-# Single input resolution for the whole pipeline; datasets/transforms read ${image_size}.
+# Classification input resolution (images are resized to this) and the synthetic-image canvas
+# size; classification datasets/transforms read ${image_size}. Segmentation no longer resizes
+# — it trains on ${crop_size} crops and infers with sliding windows (see crop_size below).
 image_size: 384
+# Segmentation crop / sliding-window size. Training crops ${crop_size} out of the native-
+# resolution slice; validation/prediction slide a ${crop_size} window over the full image.
+# It becomes a direct U-Net input, so it must be divisible by the encoder's downsampling
+# stride (32 for the resnet encoders); the default 192 = 6*32 satisfies this.
+crop_size: 192
 # Checkpoint to resume training from (Lightning restores epoch/optimizer/scheduler state).
 # null -> fresh run. Override with a path, e.g. ckpt_path=outputs/.../checkpoints/last.ckpt.
 ckpt_path: null

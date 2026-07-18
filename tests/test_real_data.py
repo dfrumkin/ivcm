@@ -18,11 +18,18 @@ pytestmark = pytest.mark.skipif(not DATA_DIR.exists(), reason="proprietary data/
 def _compose(*overrides: str) -> DictConfig:
     # Pin data_dir to an absolute path so the test doesn't depend on the pytest working
     # directory (the config default is the relative ${oc.env:IVCM_DATA_DIR,data}); small
-    # image_size keeps the smoke runs fast.
+    # image_size (classification) and crop_size (segmentation sliding-window size) keep the smoke
+    # runs fast. Segmentation validation runs at the real slices' native resolution regardless.
     with initialize_config_dir(config_dir=CONFIGS_DIR, version_base=None):
         return compose(
             config_name="train",
-            overrides=[f"data_dir={DATA_DIR}", "image_size=64", "data.batch_size=2", *overrides],
+            overrides=[
+                f"data_dir={DATA_DIR}",
+                "image_size=64",
+                "crop_size=32",
+                "data.batch_size=2",
+                *overrides,
+            ],
         )
 
 

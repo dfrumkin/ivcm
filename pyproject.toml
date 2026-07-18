@@ -10,6 +10,7 @@ dependencies = [
     "hydra-core",
     "timm",
     "segmentation-models-pytorch",
+    "monai",
     "albumentations",
     "torchmetrics",
     "wandb",

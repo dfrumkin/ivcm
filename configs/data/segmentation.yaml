@@ -10,8 +10,8 @@ train_dataset:
   image_size: ${image_size}
   seed: 0
   transform:
-    _target_: ivcm.data.transforms.build_d4_transform
-    size: ${image_size}
+    _target_: ivcm.data.transforms.build_crop_transform
+    size: ${crop_size}
 val_dataset:
   _target_: ivcm.data.SyntheticSegmentationDataset
   num_samples: 32
@@ -19,5 +19,4 @@ val_dataset:
   image_size: ${image_size}
   seed: 10000
   transform:
-    _target_: ivcm.data.transforms.build_eval_transform
-    size: ${image_size}
+    _target_: ivcm.data.transforms.build_seg_eval_transform

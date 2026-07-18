@@ -227,19 +227,20 @@ def test_is_nerve_mapping_matches_argmax_vs_nerve_index() -> None:
     assert (predicted_class(logits) == 1) is False  # nerves at a different index -> not nerve
 
 
-def test_mask_from_seg_logits_resizes_to_original() -> None:
-    # 2x2 logits where foreground (class 1) wins only at the top-left cell.
+def test_mask_from_seg_logits_argmax_at_native_resolution() -> None:
+    # 2x2 logits where foreground (class 1) wins only at the top-left cell. Sliding-window
+    # inference already produces native-resolution logits, so the mask is a plain argmax at the
+    # logits' own H×W — no resize to a separate original size.
     logits = torch.zeros((1, 2, 2, 2))
     logits[0, 1, 0, 0] = 10.0
 
-    mask = mask_from_seg_logits(logits, (4, 4))
+    mask = mask_from_seg_logits(logits)
 
-    assert mask.shape == (4, 4)
+    assert mask.shape == (2, 2)  # same H×W as the logits, not upsampled
     assert mask.dtype == np.uint8
     assert set(np.unique(mask).tolist()) <= {0, 1}
-    # Nearest-neighbour upsample: the top-left quadrant is foreground, the rest background.
-    assert mask[0, 0] == 1
-    assert mask[3, 3] == 0
+    assert mask[0, 0] == 1  # foreground where class 1 wins
+    assert mask[1, 1] == 0  # background elsewhere
 
 
 def test_map_to_mask_center_margins_and_corners() -> None:

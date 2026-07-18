@@ -45,6 +45,13 @@ def test_cv_config_resolves():
     assert cfg.data.fold == 0
     assert "trainer" in cfg  # provided by the shared common.yaml
 
+    # Crop / sliding-window wiring: crop_size is a root field, and both the model's roi_size and
+    # the real datamodule's crop_size interpolate to it (the `${crop_size}` links most likely to
+    # regress).
+    assert cfg.crop_size is not None
+    assert cfg.model.roi_size == cfg.crop_size
+    assert cfg.data.crop_size == cfg.crop_size
+
 
 def test_cv_rejects_global_ckpt_path():
     """cross-validate must refuse a global ckpt_path: one checkpoint cannot map to per-fold runs."""

@@ -23,6 +23,7 @@ def test_segmentation_logs_metric_keys():
             overrides=[
                 "task=segmentation",
                 "image_size=32",
+                "crop_size=32",
                 "data.train_dataset.num_samples=4",
                 "data.val_dataset.num_samples=4",
                 "data.batch_size=2",

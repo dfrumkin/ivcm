@@ -7,4 +7,4 @@ n_folds: 5
 fold: 0
 batch_size: 4
 num_workers: 0
-size: ${image_size}
+crop_size: ${crop_size}

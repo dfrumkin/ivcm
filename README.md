@@ -107,8 +107,12 @@ A future bundler/installer (none exists today) uses, per platform: `icon.icns` (
 
 Training is built on **PyTorch Lightning** with **Hydra** configuration. Both a
 classification and a segmentation pipeline are supported; the `task` config group is
-the single switch between them. Inputs are single-channel images resized to
-`${image_size}` (default `384×384`).
+the single switch between them. Inputs are single-channel images. **Classification** resizes
+each image to `${image_size}` (default `384×384`). **Segmentation** trains on native-resolution
+random `${crop_size}` crops (default `192×192`) and runs inference with **sliding-window
+inference** over `${crop_size}` windows, so no resizing is applied to segmentation data
+(`crop_size` must be divisible by the encoder's downsampling stride, 32 for the resnet
+encoders).
 
 ### Data
 
@@ -166,7 +170,8 @@ What is configurable (all via `_target_`): architecture (`timm` for classificati
 `segmentation-models-pytorch` for segmentation), loss, optimizer, scheduler, and the
 datasets/data module. The class set is driven by a single `class_names` list per task (the
 count is derived as `${len:${class_names}}`). Augmentation is currently **D4** (90°
-rotations + flips) plus a resize to `${image_size}`, via Albumentations.
+rotations + flips) via Albumentations, combined with a resize to `${image_size}` for
+classification and a random `${crop_size}` crop for segmentation.
 
 ### Outputs, logging, and tracking
 
@@ -265,12 +270,13 @@ This takes the **finished CV output directory** as its only argument and writes
 `<cv_dir>/predictions.nii`: a combined binary nerve mask (`0`/`1`, `uint8`) at the GT
 resolution and affine, where **each slice is predicted by the fold's best model that did not
 train on it** (the validation blocks partition every slice, so the volume is directly
-overlayable on `mask_gt.nii`). It requires the CV to have been run with `callbacks=default`
-(so a monitored best checkpoint exists per fold).
+overlayable on `mask_gt.nii`). Each slice is predicted at its native resolution via
+sliding-window inference, so no resize is involved. It requires the CV to have been run with
+`callbacks=default` (so a monitored best checkpoint exists per fold).
 
 Unlike `train`/`cross-validate`, `predict-cv` is **not** a Hydra command: it reads the run's
-own saved `.hydra/config.yaml` (so the model, paths, `n_folds`, and `image_size` match what
-was trained) and writes nothing into the run dir except `predictions.nii`. Two data-location
+own saved `.hydra/config.yaml` (so the model, paths, `n_folds`, and `crop_size` match what was
+trained) and writes nothing into the run dir except `predictions.nii`. Two data-location
 cases:
 
 - **Default (relative) `data_dir`** — the volumes are recovered automatically from the run's
@@ -284,7 +290,7 @@ cases:
 
 ```
 configs/
-  common.yaml             # shared root: seed, image_size, data_dir, trainer/logger defaults
+  common.yaml             # shared root: seed, image_size, crop_size, data_dir, trainer/logger defaults
   train.yaml              # root for `train`: includes common, mandatory `task: ???`
   cv.yaml                 # root for `cross-validate`: segmentation + real CV data
   task/                   # classification | segmentation (class_names + composes groups)
@@ -299,7 +305,7 @@ configs/
 
 ```
 src/ivcm/
-  data/        # real (.tif/.nii) + synthetic datasets, datamodules, D4+resize transforms
+  data/        # real (.tif/.nii) + synthetic datasets, datamodules, D4 + resize/crop transforms
   models/      # classification + segmentation LightningModules (incl. metrics)
   utils/       # logging setup, device selection (shared by predict + UI)
   app/         # PySide6 clinical-review UI (`ivcm-ui` console script; optional `ui` extra)
