@@ -7,11 +7,14 @@ from typing import Any
 
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, QPersistentModelIndex, Qt, QTimer
 
-from ivcm.app.records import ImageRecord
+from ivcm.app.records import MAX_PINNED, ImageRecord, pinned_count
 
-# Column layout: checkbox ("Use"), name, then the three metrics.
-_COLUMNS = ("Use", "Name", "Density", "Area", "Perimeter")
-_METRIC_KEYS = {2: "density", 3: "area", 4: "perimeter"}
+# Column layout: two checkboxes ("Pin", "Use"), name, then the three metrics.
+_COLUMNS = ("Pin", "Use", "Name", "Density", "Area", "Perimeter")
+_METRIC_KEYS = {3: "density", 4: "area", 5: "perimeter"}
+_PIN_COLUMN = 0
+_USE_COLUMN = 1
+_NAME_COLUMN = 2
 
 _Index = QModelIndex | QPersistentModelIndex
 _NO_PARENT = QModelIndex()  # module-level singleton: a function-call default would trip ruff B008
@@ -21,15 +24,27 @@ class ResultsTableModel(QAbstractTableModel):
     """Read-adapter over a shared ``list[ImageRecord]``.
 
     The list is owned (and re-sorted in place) by the main window; the model never mutates it
-    except to flip ``is_nerve`` on a checkbox edit. ``setData`` only flips the flag and schedules
-    the heavy segment-and-refresh work to run *after* it returns (via ``QTimer.singleShot(0)``),
-    so the model is never reset re-entrantly from inside an edit.
+    except to flip ``is_nerve``/``pinned`` on a checkbox edit. ``setData`` only flips the flags and
+    schedules the heavy segment-and-refresh work to run *after* it returns (via
+    ``QTimer.singleShot(0)``), so the model is never reset re-entrantly from inside an edit.
+
+    ``on_pin(record, now_checked)`` runs the pin-toggle's consequences; ``on_pin_rejected`` shows
+    the "at most three pins" pop-up when a fourth pin is attempted (also deferred, so no modal
+    dialog opens on the edit path).
     """
 
-    def __init__(self, records: list[ImageRecord], on_toggle: Callable[[ImageRecord], None]) -> None:
+    def __init__(
+        self,
+        records: list[ImageRecord],
+        on_toggle: Callable[[ImageRecord], None],
+        on_pin: Callable[[ImageRecord, bool], None],
+        on_pin_rejected: Callable[[], None],
+    ) -> None:
         super().__init__()
         self._records = records
         self._on_toggle = on_toggle
+        self._on_pin = on_pin
+        self._on_pin_rejected = on_pin_rejected
 
     def refresh(self) -> None:
         """Re-read the (possibly re-sorted) record list into the view."""
@@ -52,12 +67,16 @@ class ResultsTableModel(QAbstractTableModel):
             return None
         record = self._records[index.row()]
         column = index.column()
-        if column == 0:
+        if column == _PIN_COLUMN:
+            if role == Qt.ItemDataRole.CheckStateRole:
+                return Qt.CheckState.Checked if record.pinned else Qt.CheckState.Unchecked
+            return None
+        if column == _USE_COLUMN:
             if role == Qt.ItemDataRole.CheckStateRole:
                 return Qt.CheckState.Checked if record.is_nerve else Qt.CheckState.Unchecked
             return None
         if role == Qt.ItemDataRole.DisplayRole:
-            if column == 1:
+            if column == _NAME_COLUMN:
                 return record.name
             if record.is_nerve and record.metrics is not None:
                 return f"{record.metrics[_METRIC_KEYS[column]]:.2f}"
@@ -65,18 +84,43 @@ class ResultsTableModel(QAbstractTableModel):
         return None
 
     def setData(self, index: _Index, value: Any, role: int = Qt.ItemDataRole.EditRole) -> bool:
-        if index.column() == 0 and role == Qt.ItemDataRole.CheckStateRole:
-            record = self._records[index.row()]
-            record.is_nerve = int(value) == int(Qt.CheckState.Checked.value)
-            self.dataChanged.emit(index, index, [Qt.ItemDataRole.CheckStateRole])
-            QTimer.singleShot(0, lambda: self._on_toggle(record))
-            return True
+        if role != Qt.ItemDataRole.CheckStateRole:
+            return False
+        checked = int(value) == int(Qt.CheckState.Checked.value)
+        if index.column() == _PIN_COLUMN:
+            return self._set_pin(index.row(), checked)
+        if index.column() == _USE_COLUMN:
+            return self._set_use(index.row(), checked)
         return False
+
+    def _set_pin(self, row: int, checked: bool) -> bool:
+        record = self._records[row]
+        if checked and not record.pinned and pinned_count(self._records) >= MAX_PINNED:
+            QTimer.singleShot(0, self._on_pin_rejected)  # deferred so no modal opens on the edit path
+            return False
+        record.pinned = checked
+        if checked:
+            record.is_nerve = True  # pinning forces "use"
+        self._emit_row_changed(row)  # pin, use, and the metric columns can all change
+        QTimer.singleShot(0, lambda: self._on_pin(record, checked))
+        return True
+
+    def _set_use(self, row: int, checked: bool) -> bool:
+        record = self._records[row]
+        record.is_nerve = checked
+        if not checked:
+            record.pinned = False  # unchecking Use always unpins
+        self._emit_row_changed(row)
+        QTimer.singleShot(0, lambda: self._on_toggle(record))
+        return True
+
+    def _emit_row_changed(self, row: int) -> None:
+        self.dataChanged.emit(self.index(row, 0), self.index(row, len(_COLUMNS) - 1))
 
     def flags(self, index: _Index) -> Qt.ItemFlag:
         if not index.isValid():
             return Qt.ItemFlag.NoItemFlags
         base = Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
-        if index.column() == 0:
+        if index.column() in (_PIN_COLUMN, _USE_COLUMN):
             base |= Qt.ItemFlag.ItemIsUserCheckable
         return base

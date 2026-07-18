@@ -20,7 +20,13 @@ _TILE = 320  # max side length of each tile's image
 
 
 class Top3Window(QWidget):
-    """Shows the current top-3 records; "Remove" asks the main window to uncheck that record.
+    """Shows the current top-3 records with a per-tile pin toggle and a "Don't Use" button.
+
+    The pin toggle reads "Unpin" for a pinned image (asks the main window to unpin it) and "Pin"
+    for an unpinned one (asks it to pin it, exactly like checking Pin in the main table — subject to
+    the three-pin limit). "Don't Use" asks the main window to uncheck Use (which also unpins). Each
+    mirrors the corresponding action in the main table; the button re-renders on the next
+    :meth:`refresh`, so pinning flips it to "Unpin".
 
     The main window calls :meth:`refresh` with the current top-3 on every change, so the two
     windows stay in sync. The window remembers the last records it was given and its own mask
@@ -28,7 +34,9 @@ class Top3Window(QWidget):
     window's slider).
     """
 
-    remove_requested = Signal(object)  # emits the ImageRecord to uncheck
+    pin_requested = Signal(object)  # emits the ImageRecord to pin
+    unpin_requested = Signal(object)  # emits the ImageRecord to unpin
+    dont_use_requested = Signal(object)  # emits the ImageRecord to uncheck (Use, and Pin if set)
 
     def __init__(self, config: AppConfig) -> None:
         super().__init__()
@@ -100,12 +108,21 @@ class Top3Window(QWidget):
         info_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(info_label)
 
-        remove = QPushButton("Remove")
+        buttons = QHBoxLayout()
+        # A pinned image shows "Unpin"; an unpinned one shows "Pin" (checking Pin in the main table).
+        pin_toggle = QPushButton("Unpin" if record.pinned else "Pin")
+        dont_use = QPushButton("Don't Use")
 
-        def emit_remove() -> None:  # `record` is this call's parameter — no late-binding capture
-            self.remove_requested.emit(record)
+        def emit_pin_toggle() -> None:  # `record` is this call's parameter — no late-binding capture
+            (self.unpin_requested if record.pinned else self.pin_requested).emit(record)
 
-        remove.clicked.connect(emit_remove)
-        layout.addWidget(remove)
+        def emit_dont_use() -> None:
+            self.dont_use_requested.emit(record)
+
+        pin_toggle.clicked.connect(emit_pin_toggle)
+        dont_use.clicked.connect(emit_dont_use)
+        buttons.addWidget(pin_toggle)
+        buttons.addWidget(dont_use)
+        layout.addLayout(buttons)
 
         return tile

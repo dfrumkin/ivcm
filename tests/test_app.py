@@ -19,7 +19,15 @@ from ivcm.app.editing import (
     stamp_stroke,
 )
 from ivcm.app.inference import mask_from_seg_logits, predicted_class
-from ivcm.app.records import ImageRecord, selection_after_toggle, sort_key, sorted_records, top3
+from ivcm.app.records import (
+    MAX_PINNED,
+    ImageRecord,
+    pinned_count,
+    selection_after_toggle,
+    sort_key,
+    sorted_records,
+    top3,
+)
 from ivcm.app.render import overlay
 from ivcm.app.summary import selection_summary
 
@@ -30,11 +38,12 @@ def _rec(
     density: float | None = None,
     area: float | None = None,
     perimeter: float | None = None,
+    pinned: bool = False,
 ) -> ImageRecord:
     metrics = None
     if density is not None:
         metrics = {"density": density, "area": area or 0.0, "perimeter": perimeter or 0.0}
-    return ImageRecord(path=Path(name), is_nerve=is_nerve, metrics=metrics)
+    return ImageRecord(path=Path(name), is_nerve=is_nerve, pinned=pinned, metrics=metrics)
 
 
 def test_sort_key_orders_nerve_first_then_metrics_then_name() -> None:
@@ -58,6 +67,43 @@ def test_sort_key_unchecked_rows_order_by_name_below_nerve() -> None:
     order = [r.name for r in sorted_records([y, x, nerve])]
 
     assert order == ["z.tif", "x.tif", "y.tif"]
+
+
+def test_sort_key_pinned_rows_float_above_unpinned_used_rows() -> None:
+    # A pinned row with weak metrics still sorts above a higher-metric unpinned used row; the
+    # pinned group orders internally by the metric key, and unchecked rows stay last.
+    strong = _rec("strong.tif", True, density=100, area=1, perimeter=1)
+    pin_low = _rec("plow.tif", True, density=1, area=1, perimeter=1, pinned=True)
+    pin_high = _rec("phigh.tif", True, density=5, area=1, perimeter=1, pinned=True)
+    unchecked = _rec("u.tif", False)
+
+    order = [r.name for r in sorted_records([strong, pin_low, pin_high, unchecked])]
+
+    # Pinned first (by density desc within the group), then the unpinned used row, then unchecked.
+    assert order == ["phigh.tif", "plow.tif", "strong.tif", "u.tif"]
+
+
+def test_pinned_count_counts_pinned_records() -> None:
+    records = [
+        _rec("a.tif", True, density=1, area=1, perimeter=1, pinned=True),
+        _rec("b.tif", True, density=1, area=1, perimeter=1, pinned=True),
+        _rec("c.tif", True, density=1, area=1, perimeter=1),
+        _rec("d.tif", False),
+    ]
+    assert pinned_count(records) == 2
+    assert pinned_count([]) == 0
+
+
+def test_top3_lists_pinned_first_and_stays_capped_at_three() -> None:
+    # Five used-and-measured rows; the weakest is pinned, so it leads the top-3 despite its metrics,
+    # displacing what would otherwise be the third row — still only three are returned.
+    recs = [_rec(f"{i}.tif", True, density=float(i), area=1, perimeter=1) for i in range(5)]
+    recs[0].pinned = True  # density 0, the weakest
+
+    names = [r.name for r in top3(recs)]
+
+    assert names == ["0.tif", "4.tif", "3.tif"]  # pinned first, then highest-density unpinned
+    assert len(names) == MAX_PINNED
 
 
 def test_top3_returns_first_three_checked_with_metrics_and_updates() -> None:

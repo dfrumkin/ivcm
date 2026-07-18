@@ -38,7 +38,7 @@ from ivcm.app.inference import InferenceEngine, load_image
 from ivcm.app.mask_slider import alpha_from_slider, make_mask_slider, slider_from_alpha
 from ivcm.app.overlay_dialog import OverlayDialog
 from ivcm.app.preview import PREVIEW_MAX, EditablePreview
-from ivcm.app.records import ImageRecord, selection_after_toggle, sort_key, top3
+from ivcm.app.records import MAX_PINNED, ImageRecord, pinned_count, selection_after_toggle, sort_key, top3
 from ivcm.app.summary_panel import SummaryPanel
 from ivcm.app.table_model import ResultsTableModel
 from ivcm.app.top3_window import Top3Window
@@ -54,8 +54,9 @@ _BRUSH_MIN = 1
 _BRUSH_MAX = 8
 _BRUSH_DEFAULT = 2
 
-# Fixed launch widths (px) for the left table's columns: a narrow checkbox column, a name column
+# Fixed launch widths (px) for the left table's columns: two narrow checkbox columns, a name column
 # sized for typical filenames (long names are ellided, not widened), and content-width metrics.
+_PIN_WIDTH = 44
 _USE_WIDTH = 44
 _NAME_WIDTH = 200
 _METRIC_WIDTH = 90
@@ -77,7 +78,7 @@ class MainWindow(QMainWindow):
         self._original_mask: np.ndarray | None = None
         self._history: EditHistory | None = None
 
-        self.model = ResultsTableModel(self.records, self._on_toggle)
+        self.model = ResultsTableModel(self.records, self._on_toggle, self._on_pin, self._on_pin_rejected)
         self.table = QTableView()
         self.table.setModel(self.model)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
@@ -115,32 +116,35 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(central)
 
         self.top3_window = Top3Window(engine.config)
-        self.top3_window.remove_requested.connect(self._on_remove_from_top3)
+        self.top3_window.pin_requested.connect(self._on_pin_from_top3)
+        self.top3_window.unpin_requested.connect(self._on_unpin_from_top3)
+        self.top3_window.dont_use_requested.connect(self._on_dont_use_from_top3)
 
         self._build_toolbar()
         self._update_preview()  # nothing selected yet: placeholder, Edit + blender disabled
         self.resize(self._initial_size())
 
     def _configure_columns(self) -> None:
-        """Fixed launch widths: narrow "Use", a name column for typical names, content metrics."""
+        """Fixed launch widths: narrow "Pin"/"Use", a name column for typical names, content metrics."""
         header = self.table.horizontalHeader()
         header.setStretchLastSection(False)
-        self.table.setColumnWidth(0, _USE_WIDTH)
-        self.table.setColumnWidth(1, _NAME_WIDTH)
-        for column in (2, 3, 4):
+        self.table.setColumnWidth(0, _PIN_WIDTH)
+        self.table.setColumnWidth(1, _USE_WIDTH)
+        self.table.setColumnWidth(2, _NAME_WIDTH)
+        for column in (3, 4, 5):
             self.table.setColumnWidth(column, _METRIC_WIDTH)
         # Names longer than the column are ellided rather than widening the table.
-        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Interactive)
+        header.setSectionResizeMode(2, QHeaderView.ResizeMode.Interactive)
 
     def _initial_size(self) -> QSize:
-        """Window size that shows all five table columns plus the preview, with no h-scrollbar.
+        """Window size that shows all six table columns plus the preview, with no h-scrollbar.
 
         Budgets the sum of column widths, the vertical header, the table frame, and a
         vertical-scrollbar-width allowance (so columns still fit once enough rows show a vertical
         scrollbar), then adds the preview pane and layout margins. The height adds the summary
         panel's own height on top of the previous budget, so the panel costs the preview nothing.
         """
-        columns = _USE_WIDTH + _NAME_WIDTH + 3 * _METRIC_WIDTH
+        columns = _PIN_WIDTH + _USE_WIDTH + _NAME_WIDTH + 3 * _METRIC_WIDTH
         frame = 2 * self.table.frameWidth()
         vheader = self.table.verticalHeader().sizeHint().width()
         scrollbar = self.style().pixelMetric(self.style().PixelMetric.PM_ScrollBarExtent)
@@ -312,8 +316,8 @@ class MainWindow(QMainWindow):
         progress = QProgressDialog("Processing images…", "", 0, len(files), self)
         progress.setCancelButton(None)  # uncancellable: the batch always runs to completion
         # Application-modal (not window-modal): setValue pumps events during the batch, and the
-        # top-3 window has no parent — only application modality blocks its "Remove" clicks from
-        # mutating self.records mid-build.
+        # top-3 window has no parent — only application modality blocks its Unpin / Don't Use clicks
+        # from mutating self.records mid-build.
         progress.setWindowModality(Qt.WindowModality.ApplicationModal)
         progress.setMinimumDuration(0)
 
@@ -344,34 +348,89 @@ class MainWindow(QMainWindow):
 
     # --- checkbox / top-3 ------------------------------------------------
 
+    def _ensure_segmented(self, record: ImageRecord) -> bool:
+        """Segment ``record`` (and compute its metrics) if not already done; ``False`` on failure.
+
+        Cached results (``mask`` already present) are a no-op success. On a segmentation error the
+        cached fields are cleared and a status message is shown; the caller reverts the checkbox.
+        """
+        if record.mask is not None:
+            return True
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            image = load_image(record.path)
+            record.mask = self.engine.segment(image)
+            record.metrics = self.engine.morphometry(record.mask)
+            return True
+        except Exception:
+            log.exception("Segmentation failed for %s", record.name)
+            record.mask = None
+            record.metrics = None
+            self.statusBar().showMessage(f"Segmentation failed for {record.name}.")
+            return False
+        finally:
+            QApplication.restoreOverrideCursor()
+
     def _on_toggle(self, record: ImageRecord) -> None:
-        """Checkbox changed: segment if newly checked and unmeasured, then re-sort and refresh.
+        """Use changed: segment if newly checked and unmeasured, then re-sort and refresh.
 
         The prior current row is captured first (before segmentation/sort can move it). Checking
         follows the toggled record to its new position; unchecking keeps the prior row position
         (a failed check reverts to unchecked and so takes the keep-position branch).
         """
         prior_row = self.table.currentIndex().row()
-        if record.is_nerve and record.mask is None:
-            QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
-            try:
-                image = load_image(record.path)
-                record.mask = self.engine.segment(image)
-                record.metrics = self.engine.morphometry(record.mask)
-            except Exception:
-                log.exception("Segmentation failed for %s", record.name)
-                record.is_nerve = False
-                record.mask = None
-                record.metrics = None
-                self.statusBar().showMessage(f"Segmentation failed for {record.name}.")
-            finally:
-                QApplication.restoreOverrideCursor()
+        if record.is_nerve and not self._ensure_segmented(record):
+            record.is_nerve = False
+            record.pinned = False  # a pin can only ride on a use, so keep them consistent
         self._resort_and_refresh(lambda recs: selection_after_toggle(recs, record, record.is_nerve, prior_row))
 
-    def _on_remove_from_top3(self, record: ImageRecord) -> None:
-        """ "Remove" in the top-3 window is exactly an uncheck in the table (keeps row position)."""
+    def _on_pin(self, record: ImageRecord, now_checked: bool) -> None:
+        """Pin changed: on a successful pin the record is used and measured; re-sort and refresh.
+
+        Pinning forces Use (already set by the model), so segment if needed; a failure reverts both
+        Pin and Use. A successful pin follows the record to the top; an unpin (or a failed pin)
+        keeps the prior row position.
+        """
+        prior_row = self.table.currentIndex().row()
+        if now_checked and not self._ensure_segmented(record):
+            record.pinned = False
+            record.is_nerve = False
+        self._resort_and_refresh(
+            lambda recs: selection_after_toggle(recs, record, now_checked and record.pinned, prior_row)
+        )
+
+    def _on_pin_rejected(self) -> None:
+        """A fourth pin was attempted: tell the user the limit."""
+        QMessageBox.warning(self, "ivcm", "At most 3 images can be pinned!")
+
+    def _on_pin_from_top3(self, record: ImageRecord) -> None:
+        """ "Pin" in the top-3 window is exactly checking Pin in the table (subject to the limit).
+
+        Enforces the three-pin cap (warning instead of pinning a fourth), forces Use and segments if
+        needed, then follows the record to its new top position.
+        """
+        if not record.pinned and pinned_count(self.records) >= MAX_PINNED:
+            self._on_pin_rejected()
+            return
+        prior_row = self.table.currentIndex().row()
+        record.pinned = True
+        record.is_nerve = True  # pinning forces "use"
+        if not self._ensure_segmented(record):
+            record.pinned = False
+            record.is_nerve = False
+        self._resort_and_refresh(lambda recs: selection_after_toggle(recs, record, record.pinned, prior_row))
+
+    def _on_unpin_from_top3(self, record: ImageRecord) -> None:
+        """ "Unpin" in the top-3 window is exactly unchecking Pin in the table (keeps row position)."""
+        prior_row = self.table.currentIndex().row()
+        record.pinned = False
+        self._resort_and_refresh(lambda recs: selection_after_toggle(recs, record, False, prior_row))
+
+    def _on_dont_use_from_top3(self, record: ImageRecord) -> None:
+        """ "Don't Use" is exactly unchecking Use in the table (also unpins; keeps row position)."""
         prior_row = self.table.currentIndex().row()
         record.is_nerve = False
+        record.pinned = False
         self._resort_and_refresh(lambda recs: selection_after_toggle(recs, record, False, prior_row))
 
     def _show_top3(self) -> None:
@@ -408,7 +467,7 @@ class MainWindow(QMainWindow):
         if target is None:
             self.table.setCurrentIndex(QModelIndex())
             return
-        self.table.setCurrentIndex(self.model.index(target, 1))
+        self.table.setCurrentIndex(self.model.index(target, 2))
 
     def _on_mask_alpha_changed(self, value: int) -> None:
         # While editing, the slider is the blender for the in-progress mask: re-render from the

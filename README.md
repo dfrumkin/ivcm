@@ -49,13 +49,18 @@ environment.
 A simple PySide6 desktop app for reviewing a directory of images. The doctor chooses a directory;
 the app classifies each image, segments the predicted-"nerve" ones, runs the existing morphometry
 (`ivcm.morphometry`), and shows a folder-like table — **name, density, area, perimeter** (in
-physical units derived from the configured `physical_image_size`, not raw pixels) — with a
-per-row checkbox (the manual nerve / not-nerve label) and mask overlays. Selecting a row previews
-the overlay on the side; above that preview a compact panel summarises the checked images — the
-count, plus a small distribution strip per metric (over a `0`-to-max axis) marking the mean, ±1 SD,
-and min/max, with the exact numbers on hover. Double-click / Enter opens an image large in a
-blocking window. A second window stays in sync showing the top-3 checked images with their metrics.
-Checking a non-nerve image segments it on the spot. **Edit** under the preview opens an in-place mask
+physical units derived from the configured `physical_image_size`, not raw pixels) — with a per-row
+**Use** checkbox (the manual nerve / not-nerve label), a **Pin** checkbox before it, and mask
+overlays. Pinned rows sort to the very top (before the other checked rows); pinning an image also
+checks **Use** (segmenting it if needed), and at most three images may be pinned (a fourth attempt
+just warns). Unchecking **Use** also unpins. Selecting a row previews the overlay on the side;
+above that preview a compact panel summarises the checked images — the count, plus a small
+distribution strip per metric (over a `0`-to-max axis) marking the mean, ±1 SD, and min/max, with
+the exact numbers on hover. Double-click / Enter opens an image large in a blocking window. A
+second window stays in sync showing the top-3 checked images (pinned first) with their metrics and,
+per image, a pin toggle (**Unpin** when pinned, **Pin** otherwise — pinning here obeys the same
+three-pin limit) and a **Don't Use** button. Checking a non-nerve
+image segments it on the spot. **Edit** under the preview opens an in-place mask
 editor — paint with the left mouse button, erase with the right, adjust the brush size, and undo/redo
 per stroke, with **Keep** / **Discard** icons (the rest of the UI is frozen during an edit). Keep
 recomputes that image's metrics, marks it a nerve, and re-sorts its row; Discard reverts (asking to

@@ -7,6 +7,8 @@ from pathlib import Path
 
 import numpy as np
 
+MAX_PINNED = 3  # at most this many rows may be pinned at once
+
 
 @dataclass(eq=False)
 class ImageRecord:
@@ -16,14 +18,17 @@ class ImageRecord:
     field-wise ``__eq__`` would compare the numpy ``mask`` (an ambiguous truth value). This lets
     ``list.index(record)`` and set/dict membership work by identity.
 
-    ``is_nerve`` is the checkbox state (the manual nerve/not-nerve label). ``mask`` and
-    ``metrics`` are filled lazily by segmentation and cached, so they persist even after the
-    row is unchecked (the overlay still shows in the preview/large view). ``metrics`` holds the
-    ``cell_morphometry`` output (``{"density", "area", "perimeter"}``) once computed.
+    ``is_nerve`` is the checkbox state (the manual nerve/not-nerve label). ``pinned`` is the Pin
+    checkbox: a pinned row is always used (``pinned`` implies ``is_nerve``) and sorts to the very
+    top; at most :data:`MAX_PINNED` rows may be pinned. ``mask`` and ``metrics`` are filled lazily
+    by segmentation and cached, so they persist even after the row is unchecked (the overlay still
+    shows in the preview/large view). ``metrics`` holds the ``cell_morphometry`` output
+    (``{"density", "area", "perimeter"}``) once computed.
     """
 
     path: Path
     is_nerve: bool
+    pinned: bool = False
     mask: np.ndarray | None = None
     metrics: dict[str, float] | None = None
 
@@ -32,19 +37,27 @@ class ImageRecord:
         return self.path.name
 
 
-def sort_key(record: ImageRecord) -> tuple[int, float, float, float, str]:
+def pinned_count(records: list[ImageRecord]) -> int:
+    """How many records are currently pinned (used to enforce :data:`MAX_PINNED`)."""
+    return sum(1 for r in records if r.pinned)
+
+
+def sort_key(record: ImageRecord) -> tuple[int, int, float, float, float, str]:
     """Fixed (non-user-changeable) order.
 
-    Checked (nerve) rows come before unchecked rows; within the checked group, by density, then
-    area, then perimeter (all descending — most prominent first), then name. Unchecked rows have
-    their metrics treated as absent and order by name only, always below checked rows. The key is
-    total, so the sort is well-defined regardless of cached metrics on unchecked rows.
+    Pinned rows come first; within each pin group, checked (nerve) rows come before unchecked rows;
+    within the checked group, by density, then area, then perimeter (all descending — most
+    prominent first), then name. Unchecked rows have their metrics treated as absent and order by
+    name only, always below checked rows. Since a pinned row is always used and measured, the pin
+    tier simply floats those rows above the other used rows. The key is total, so the sort is
+    well-defined regardless of cached metrics on unchecked rows.
     """
     metrics = record.metrics if record.is_nerve and record.metrics is not None else None
     density = metrics["density"] if metrics is not None else 0.0
     area = metrics["area"] if metrics is not None else 0.0
     perimeter = metrics["perimeter"] if metrics is not None else 0.0
     return (
+        0 if record.pinned else 1,
         0 if record.is_nerve else 1,
         -density,
         -area,
@@ -59,7 +72,11 @@ def sorted_records(records: list[ImageRecord]) -> list[ImageRecord]:
 
 
 def top3(records: list[ImageRecord]) -> list[ImageRecord]:
-    """The first three checked rows with computed metrics, in the fixed order."""
+    """The first three checked rows with computed metrics, in the fixed order.
+
+    Because pinned rows are always used, measured, and sort first, they lead this list (pins first,
+    then the best unpinned used images), still capped at three.
+    """
     ordered = sorted_records(records)
     eligible = [r for r in ordered if r.is_nerve and r.metrics is not None]
     return eligible[:3]
