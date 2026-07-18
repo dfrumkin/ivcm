@@ -32,7 +32,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ivcm.app.batch import process_directory
+from ivcm.app.batch import ensure_all_square, process_directory
 from ivcm.app.editing import EditHistory, mask_changed, raise_slider_to_floor
 from ivcm.app.inference import InferenceEngine, load_image
 from ivcm.app.mask_slider import alpha_from_slider, make_mask_slider, slider_from_alpha
@@ -42,6 +42,7 @@ from ivcm.app.records import ImageRecord, selection_after_toggle, sort_key, top3
 from ivcm.app.summary_panel import SummaryPanel
 from ivcm.app.table_model import ResultsTableModel
 from ivcm.app.top3_window import Top3Window
+from ivcm.data import NonSquareImageError
 
 log = logging.getLogger(__name__)
 
@@ -285,6 +286,18 @@ class MainWindow(QMainWindow):
     def _load_directory(self, directory: Path) -> None:
         extensions = self.engine.config.accepted_extensions
         files = sorted(p for p in directory.iterdir() if p.is_file() and p.suffix.lower() in extensions)
+
+        # Enforce the square-input invariant across the whole directory *before* touching any state:
+        # a non-square image is fatal (all inputs are guaranteed square), so log it, show a dialog,
+        # and exit — leaving the previous view intact. Done before clearing so a fatal exit does not
+        # leave a half-cleared UI. Unreadable files are not fatal here (see ``ensure_all_square``).
+        try:
+            ensure_all_square(files)
+        except NonSquareImageError as exc:
+            log.error("Non-square image in %s: %s", directory, exc)
+            QMessageBox.critical(self, "ivcm — non-square image", str(exc))
+            QApplication.exit(1)  # schedule non-zero exit; return so no state is cleared / batch run
+            return
 
         # Clear current state before the batch so no selection/row from the previous directory
         # carries over by position into the new one (matches the plan's "clears the records").

@@ -18,6 +18,28 @@ from torch.utils.data import Dataset
 from ivcm.data.transforms import Transform
 
 
+class NonSquareImageError(ValueError):
+    """A pipeline input image is not square (pixel height != width).
+
+    A specific type so callers (the UI directory pre-scan in particular) can distinguish a
+    non-square input — a fatal, guaranteed-invariant violation — from ordinary load/decode
+    failures, which are handled separately.
+    """
+
+
+def ensure_square(shape: Sequence[int], *, source: str) -> None:
+    """Raise :class:`NonSquareImageError` unless ``shape``'s first two dims (H, W) are equal.
+
+    Takes a shape-like (an ``(H, W[, ...])`` tuple), not an array, so the UI pre-scan's
+    header-only dimension read stays cheap for large images. Array callers pass ``image.shape``.
+    """
+    height, width = int(shape[0]), int(shape[1])
+    if height != width:
+        raise NonSquareImageError(
+            f"Image {source} is not square: {height}×{width}. All inputs must be square (height == width)."
+        )
+
+
 def contiguous_folds(n_slices: int, n_folds: int) -> list[np.ndarray]:
     """Partition ``range(n_slices)`` into ``n_folds`` contiguous index blocks.
 
@@ -58,6 +80,7 @@ class ClassificationImageDataset(Dataset[tuple[Any, int]]):
     def __getitem__(self, index: int) -> tuple[Any, int]:
         path, label = self.samples[index]
         image = np.asarray(Image.open(path).convert("L"), dtype=np.float32) / 255.0
+        ensure_square(image.shape, source=path.name)
         image = image[..., None]  # HWC, single channel
         if self.transform is not None:
             image = self.transform(image=image)["image"]
@@ -91,6 +114,7 @@ class NiiSegmentationDataset(Dataset[tuple[Any, Any]]):
     def __getitem__(self, index: int) -> tuple[Any, Any]:
         idx = self.slice_indices[index]
         image = self.images[:, :, idx].astype(np.float32) / 255.0
+        ensure_square(image.shape, source=f"slice {idx}")
         image = image[..., None]  # HWC, single channel
         mask = self.masks[:, :, idx].astype(np.int64)
         if self.transform is not None:

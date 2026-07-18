@@ -1,5 +1,11 @@
 from ivcm.data.datamodules import BaseDataModule, SegmentationCVDataModule
-from ivcm.data.real import ClassificationImageDataset, NiiSegmentationDataset, contiguous_folds
+from ivcm.data.real import (
+    ClassificationImageDataset,
+    NiiSegmentationDataset,
+    NonSquareImageError,
+    contiguous_folds,
+    ensure_square,
+)
 from ivcm.data.synthetic import SyntheticClassificationDataset, SyntheticSegmentationDataset
 from ivcm.data.transforms import (
     build_crop_transform,
@@ -13,6 +19,8 @@ __all__ = [
     "SegmentationCVDataModule",
     "ClassificationImageDataset",
     "NiiSegmentationDataset",
+    "NonSquareImageError",
+    "ensure_square",
     "contiguous_folds",
     "SyntheticClassificationDataset",
     "SyntheticSegmentationDataset",

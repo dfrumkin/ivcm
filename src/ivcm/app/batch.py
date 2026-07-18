@@ -29,10 +29,34 @@ from pathlib import Path
 from typing import Protocol
 
 import numpy as np
+from PIL import Image
 
 from ivcm.app.records import ImageRecord
+from ivcm.data import ensure_square
 
 log = logging.getLogger(__name__)
+
+
+def ensure_all_square(files: Sequence[Path]) -> None:
+    """Validate that every file is a square image, before the directory batch runs.
+
+    Reads each file's pixel dimensions with a lazy header read (``PIL.Image.open(path).size``, no
+    full decode) and raises ``NonSquareImageError`` naming the first **confirmed** non-square file.
+    ``PIL``'s ``.size`` is ``(width, height)``; it is normalised to ``(height, width)`` so the error
+    message matches the array-shape-based checks elsewhere.
+
+    Only non-square images are fatal here: files that fail to open/decode during the dimension read
+    are ignored (left to ``process_directory``, which reports them in ``skipped``), preserving the
+    existing per-file failure contract. Running this before the batch is what makes a non-square
+    input a hard error instead of being swallowed as a skipped file.
+    """
+    for path in files:
+        try:
+            with Image.open(path) as image:  # context manager closes the handle (no fd leak on a big dir)
+                width, height = image.size
+        except Exception:  # unreadable/corrupt: not fatal here — process_directory will skip it
+            continue
+        ensure_square((height, width), source=path.name)
 
 
 class Engine(Protocol):

@@ -1,7 +1,7 @@
 """Hardcoded application configuration for the clinical-review UI.
 
 A single ``AppConfig`` holds the two model ``(run_dir, ckpt)`` pairs, the morphometry
-constants, the overlay appearance, and the accepted image extensions. The doctor never edits
+parameters, the overlay appearance, and the accepted image extensions. The doctor never edits
 these; they only choose an image directory.
 
 The checkpoint paths are **local placeholders** (resolved relative to the repo root, derived
@@ -54,10 +54,14 @@ class AppConfig:
     classification: ModelConfig
     segmentation: ModelConfig
 
-    # Morphometry constants forwarded to ``ivcm.morphometry.cell_morphometry``.
+    # Morphometry parameters forwarded to ``ivcm.morphometry.cell_morphometry``.
+    # ``physical_image_size`` is the physical side length of the (square) input image, in the
+    # operator's unit of choice: density is ``count / physical_image_size**2`` and area/perimeter
+    # scale the raw pixel measurements by ``(physical_image_size / resolution)`` (squared for area).
+    # It is unrelated to the pixel-space ``image_size`` in the training/model config.
     sigma: float = 1.0
-    constant: float = 1.0
-    min_size: int = 0
+    physical_image_size: float = 2.5
+    min_size: int = 3
 
     # Overlay appearance: RGB mask colour and blend alpha in [0, 1].
     mask_color: tuple[int, int, int] = (255, 0, 0)
@@ -77,6 +81,8 @@ class AppConfig:
             raise ValueError(f"batch_size must be >= 1; got {self.batch_size}.")
         if self.num_workers < 1:
             raise ValueError(f"num_workers must be >= 1; got {self.num_workers}.")
+        if self.physical_image_size <= 0:
+            raise ValueError(f"physical_image_size must be > 0; got {self.physical_image_size}.")
 
 
 # Edit these to this machine's trained runs. Both ``run_dir`` values must contain

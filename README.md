@@ -48,7 +48,8 @@ environment.
 
 A simple PySide6 desktop app for reviewing a directory of images. The doctor chooses a directory;
 the app classifies each image, segments the predicted-"nerve" ones, runs the existing morphometry
-(`ivcm.morphometry`), and shows a folder-like table — **name, density, area, perimeter** — with a
+(`ivcm.morphometry`), and shows a folder-like table — **name, density, area, perimeter** (in
+physical units derived from the configured `physical_image_size`, not raw pixels) — with a
 per-row checkbox (the manual nerve / not-nerve label) and mask overlays. Selecting a row previews
 the overlay on the side; above that preview a compact panel summarises the checked images — the
 count, plus a small distribution strip per metric (over a `0`-to-max axis) marking the mean, ±1 SD,
@@ -68,7 +69,7 @@ uv run ivcm-ui              # launch the app (from this checkout)
 **Checkpoints are preconfigured, not committed.** Trained checkpoints and `outputs/` are gitignored
 local artifacts, so the app is **not runnable on a clean checkout** — edit the two `(run_dir, ckpt)`
 pairs in [`src/ivcm/app/config.py`](src/ivcm/app/config.py) to point at this machine's trained runs
-(and tune the morphometry constants there if needed):
+(and tune the morphometry parameters `physical_image_size`, `sigma`, and `min_size` there if needed):
 
 ```python
 CONFIG = AppConfig(

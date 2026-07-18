@@ -32,7 +32,7 @@ from PIL import Image
 from torch import nn
 
 from ivcm.app.config import AppConfig, ModelConfig
-from ivcm.data import build_eval_transform, build_seg_eval_transform
+from ivcm.data import build_eval_transform, build_seg_eval_transform, ensure_square
 from ivcm.models.segmentation import SegmentationModule, sliding_window_logits
 from ivcm.morphometry import cell_morphometry
 from ivcm.utils import select_device
@@ -42,9 +42,12 @@ def load_image(path: Path) -> np.ndarray:
     """Load an image as a single-channel ``HWC`` float array in ``[0, 1]``.
 
     Matches ``ClassificationImageDataset`` / ``NiiSegmentationDataset`` preprocessing: grayscale
-    (first frame of a multi-page TIFF), normalised by 255, with a trailing channel axis.
+    (first frame of a multi-page TIFF), normalised by 255, with a trailing channel axis. Enforces
+    the square-input invariant (raising ``NonSquareImageError``) so the engine only ever yields
+    square images; the UI validates the whole directory up front (see ``ivcm.app.batch``).
     """
     image = np.asarray(Image.open(path).convert("L"), dtype=np.float32) / 255.0
+    ensure_square(image.shape, source=path.name)
     return image[..., None]
 
 
@@ -85,7 +88,8 @@ def mask_from_seg_logits(logits: torch.Tensor) -> np.ndarray:
 
     Mirrors ``predict.py::_predict_fold``: argmax over the class dim. The logits come from
     sliding-window inference over the full native-resolution image, so they are already at the
-    original resolution — no resize back, and morphometry measures in original pixels.
+    original resolution — no resize back, so the mask side length is the native pixel resolution
+    that morphometry uses (with ``physical_image_size``) to convert its measurements to physical units.
     """
     preds = logits.argmax(dim=1)  # (1, H, W)
     return preds[0].to(torch.uint8).cpu().numpy()
@@ -260,10 +264,10 @@ class InferenceEngine:
         return [self._segment_tensor(t.unsqueeze(0).to(self.device)) for t in tensors]
 
     def morphometry(self, mask: np.ndarray) -> dict[str, float]:
-        """Density / area / perimeter for a mask, using the configured morphometry constants."""
+        """Density / area / perimeter for a mask, in physical units from the configured parameters."""
         return cell_morphometry(
             mask,
             sigma=self.config.sigma,
-            constant=self.config.constant,
+            physical_image_size=self.config.physical_image_size,
             min_size=self.config.min_size,
         )

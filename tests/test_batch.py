@@ -116,7 +116,8 @@ def test_segment_batch_handles_mixed_native_sizes() -> None:
     images (no stacking) — each mask comes back at its own H×W and matches per-image ``segment``."""
     engine = _stub_engine(size=8, batch_size=2)
     rng = np.random.default_rng(1)
-    shapes = [(8, 8), (10, 6), (12, 12), (5, 9)]  # differ in H and W; some below the ROI (8)
+    # Inputs are square (the guaranteed invariant) but differ in resolution; some below the ROI (8).
+    shapes = [(8, 8), (10, 10), (12, 12), (5, 5)]
     images = [rng.random((h, w, 1), dtype=np.float32) for h, w in shapes]
 
     with ThreadPoolExecutor(max_workers=4) as executor:
@@ -325,4 +326,14 @@ def test_app_config_rejects_non_positive_batch_or_workers(batch_size: int, num_w
             segmentation=_model_config(),
             batch_size=batch_size,
             num_workers=num_workers,
+        )
+
+
+@pytest.mark.parametrize("physical_image_size", [0.0, -1.0])
+def test_app_config_rejects_non_positive_physical_image_size(physical_image_size: float) -> None:
+    with pytest.raises(ValueError):
+        AppConfig(
+            classification=_model_config(),
+            segmentation=_model_config(),
+            physical_image_size=physical_image_size,
         )

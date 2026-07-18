@@ -93,7 +93,7 @@ def test_assembles_full_oof_volume(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     """Produces a full-volume binary mask at GT shape/affine; saved n_folds (3, not the
     default 5) and the saved absolute paths are honoured (would fail on ambient defaults)."""
     monkeypatch.setattr("ivcm.predict._select_device", _cpu)
-    h, w, n_slices, n_folds = 12, 10, 6, 3
+    h, w, n_slices, n_folds = 12, 12, 6, 3  # square slices (inputs are guaranteed square)
     data_dir = tmp_path / "data"
     images_path, masks_path = data_dir / "imgs.nii", data_dir / "mask_gt.nii"
     rng = np.random.default_rng(0)
@@ -148,7 +148,7 @@ def test_cli_tolerates_hydra_only_interpolation(
     resolver outside Hydra). Driving the CLI main() must not resolve it -> no crash, and no
     Hydra metadata is written back into the finished run."""
     monkeypatch.setattr("ivcm.predict._select_device", _cpu)
-    h, w, n_slices, n_folds = 8, 6, 4, 2
+    h, w, n_slices, n_folds = 8, 8, 4, 2  # square slices (inputs are guaranteed square)
     data_dir = tmp_path / "data"
     images_path, masks_path = data_dir / "imgs.nii", data_dir / "mask_gt.nii"
     rng = np.random.default_rng(2)
@@ -218,7 +218,7 @@ def test_predict_fold_moves_batch_to_device_and_returns_numpy() -> None:
     """The batch is moved to the passed device before the forward pass, and the result is a
     CPU uint8 NumPy array of shape (len(val_idx), H, W) at native (= GT) resolution."""
     device = torch.device("cpu")
-    h, w, n_slices = 8, 6, 4
+    h, w, n_slices = 8, 8, 4  # square slices (inputs are guaranteed square)
     rng = np.random.default_rng(3)
     images = rng.integers(0, 256, (h, w, n_slices), dtype=np.uint8)
     masks = rng.integers(0, 2, (h, w, n_slices), dtype=np.uint8)
