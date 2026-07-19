@@ -400,8 +400,17 @@ class MainWindow(QMainWindow):
         )
 
     def _on_pin_rejected(self) -> None:
-        """A fourth pin was attempted: tell the user the limit."""
-        QMessageBox.warning(self, "ivcm", "At most 3 images can be pinned!")
+        """A fourth pin was attempted: tell the user the limit.
+
+        Builds the box explicitly and forces the warning pixmap: on macOS the message box is
+        presented as a native alert, which otherwise falls back to the (generic, unbundled) app
+        icon instead of a warning glyph.
+        """
+        box = QMessageBox(self)
+        box.setWindowTitle("ivcm")
+        box.setText("At most 3 images can be pinned!")
+        box.setIconPixmap(self.style().standardIcon(QStyle.StandardPixmap.SP_MessageBoxWarning).pixmap(64, 64))
+        box.exec()
 
     def _on_pin_from_top3(self, record: ImageRecord) -> None:
         """ "Pin" in the top-3 window is exactly checking Pin in the table (subject to the limit).
