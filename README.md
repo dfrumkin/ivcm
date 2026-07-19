@@ -62,7 +62,9 @@ per image, a pin toggle (**Unpin** when pinned, **Pin** otherwise — pinning he
 three-pin limit) and a **Don't Use** button. Checking a non-nerve
 image segments it on the spot. **Edit** under the preview opens an in-place mask
 editor — paint with the left mouse button, erase with the right, adjust the brush size, and undo/redo
-per stroke, with **Keep** / **Discard** icons (the rest of the UI is frozen during an edit). Keep
+per stroke, with **Keep** / **Discard** icons (the rest of the UI is frozen during an edit). Over the
+image the cursor becomes a brush circle sized to the brush and colored by function (pink to paint,
+cyan to erase). Keep
 recomputes that image's metrics, marks it a nerve, and re-sorts its row; Discard reverts (asking to
 confirm if the mask changed). Everything is preconfigured except the directory.
 

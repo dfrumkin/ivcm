@@ -10,8 +10,43 @@ carries no Qt dependency.
 from __future__ import annotations
 
 import math
+from typing import Literal, NamedTuple
 
 import numpy as np
+
+# Below this ring diameter (display pixels) the ring is too small to read, so the brush cursor falls
+# back to a crosshair with a center dot instead.
+_CURSOR_MIN_RING_DIAMETER = 6
+# Padding (display pixels) added around the drawn shape so the outer contrast ring and anti-aliasing
+# have room inside the pixmap.
+_CURSOR_MARGIN = 3
+
+
+class CursorSpec(NamedTuple):
+    """The size/style of the brush cursor for a given brush radius, in logical (device-independent) px.
+
+    ``style`` is ``"ring"`` for a hollow circle matching the brush, or ``"crosshair"`` when the ring
+    would be too small to read (small brushes, including the 1-px minimum). ``size`` is the square
+    pixmap's odd side length (so there is a true center pixel); ``hotspot`` is that center — the point
+    that tracks the mouse. The caller rasterizes at ``size`` scaled by the device-pixel-ratio and
+    passes the logical ``hotspot`` to ``QCursor``, keeping HiDPI scaling out of this pure helper.
+    """
+
+    style: Literal["ring", "crosshair"]
+    size: int
+    hotspot: int
+
+
+def brush_cursor_spec(radius: float) -> CursorSpec:
+    """Map a brush display ``radius`` to the brush cursor's :class:`CursorSpec` (Qt-free)."""
+    radius = max(0.0, radius)
+    style: Literal["ring", "crosshair"] = "ring" if 2 * radius >= _CURSOR_MIN_RING_DIAMETER else "crosshair"
+    if style == "ring":
+        half = int(math.ceil(radius)) + _CURSOR_MARGIN
+    else:
+        half = _CURSOR_MIN_RING_DIAMETER // 2 + _CURSOR_MARGIN
+    size = 2 * half + 1  # odd, so the center pixel is exactly the hotspot
+    return CursorSpec(style=style, size=size, hotspot=half)
 
 
 def map_to_mask(

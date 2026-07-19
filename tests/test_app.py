@@ -12,6 +12,7 @@ from PIL import Image
 
 from ivcm.app.editing import (
     EditHistory,
+    brush_cursor_spec,
     map_to_mask,
     mask_changed,
     raise_slider_to_floor,
@@ -303,6 +304,22 @@ def test_map_to_mask_non_square_letterboxes_on_the_other_axis() -> None:
     # A wide image (100x50 displayed) in a square label letter-boxes top/bottom (offset_y = 25).
     assert map_to_mask((50.0, 25.0), (100, 50), (100, 100), (50, 100)) == (0, 50)
     assert map_to_mask((50.0, 10.0), (100, 50), (100, 100), (50, 100)) is None
+
+
+def test_brush_cursor_spec_style_threshold_and_growth() -> None:
+    # The smallest brushes (radius 1 and 2 => ring diameter 2 and 4, both < 6) fall back to a
+    # crosshair; from radius 3 (diameter 6) up the ring is used.
+    assert brush_cursor_spec(1).style == "crosshair"
+    assert brush_cursor_spec(2).style == "crosshair"
+    assert brush_cursor_spec(3).style == "ring"
+    assert brush_cursor_spec(8).style == "ring"
+
+    # Ring pixmaps grow with the radius; the hotspot is always the pixmap center.
+    small = brush_cursor_spec(3)
+    large = brush_cursor_spec(8)
+    assert large.size > small.size
+    for spec in (brush_cursor_spec(1), small, large):
+        assert spec.size == 2 * spec.hotspot + 1  # odd side, hotspot at the true center
 
 
 def test_stamp_disk_paints_erases_and_clips() -> None:
