@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
@@ -37,12 +38,18 @@ class Top3Window(QWidget):
     pin_requested = Signal(object)  # emits the ImageRecord to pin
     unpin_requested = Signal(object)  # emits the ImageRecord to unpin
     dont_use_requested = Signal(object)  # emits the ImageRecord to uncheck (Use, and Pin if set)
+    save_requested = Signal()  # the save shortcut (Cmd+S) was pressed while this window had focus
 
     def __init__(self, config: AppConfig) -> None:
         super().__init__()
-        self.setWindowTitle("Top 3 nerve images")
+        self.setWindowTitle("Top 3 Nerve Images")
         self._config = config
         self._records: list[ImageRecord] = []
+
+        # The save shortcut only reaches the window that has focus, so mirror it here and let the
+        # main window handle it (it gates on whether saving is currently allowed).
+        self._save_shortcut = QShortcut(QKeySequence.StandardKey.Save, self)
+        self._save_shortcut.activated.connect(self.save_requested)
 
         layout = QVBoxLayout(self)
         self._row = QHBoxLayout()

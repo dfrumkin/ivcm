@@ -46,9 +46,13 @@ environment.
 
 ## Clinical review UI
 
-A simple PySide6 desktop app for reviewing a directory of images. The doctor chooses a directory;
-the app classifies each image, segments the predicted-"nerve" ones, runs the existing morphometry
-(`ivcm.morphometry`), and shows a folder-like table — **name, density, area, perimeter** (in
+A simple PySide6 desktop app for reviewing a directory of images. The doctor starts with **Load**
+(highlighted until data is loaded): choose an image directory, then answer **"Load or create
+labels?"** — **Create** runs the pipeline afresh, **Load** re-opens results saved earlier for that
+directory (see [Saving and loading labels](#saving-and-loading-labels) below), and **Cancel** steps
+back. When creating, the app classifies each image, segments the predicted-"nerve" ones, runs the
+existing morphometry (`ivcm.morphometry`), and shows a folder-like table — **name, density, area,
+perimeter** (in
 physical units derived from the configured `physical_image_size`, not raw pixels) — with a per-row
 **Use** checkbox (the manual nerve / not-nerve label), a **Pin** checkbox before it, and mask
 overlays. Pinned rows sort to the very top (before the other checked rows); pinning an image also
@@ -72,6 +76,32 @@ confirm if the mask changed). Everything is preconfigured except the directory.
 uv sync --extra ui          # install the UI dependency
 uv run ivcm-ui              # launch the app (from this checkout)
 ```
+
+### Saving and loading labels
+
+**Save** (or Cmd+S) writes the current review — the table and the masks — to a *label directory*.
+The first save this session is a "Save As": pick where the new directory goes and type its name
+(suggested `<image-dir>_labels`, or the loaded directory's location/name when labels were loaded —
+the first save always asks in case the load source was read-only). Later saves go straight back to
+that directory. If the chosen target already exists and is a label directory the app made, it offers
+**Overwrite**/**Cancel**; if it holds anything else it is left untouched (a single **OK**, then pick
+again). A label directory contains:
+
+- `summary.csv` — one row per reviewed image: `Pin,Use,Name,Density,Area,Perimeter` (images that
+  failed to load/classify are skipped and have no row).
+- `masks/` — one single-channel PNG per segmented image (`0` background, `255` foreground), named
+  after the image (`foo.tif` → `masks/foo.tif.png`).
+
+**Load** → **Load labels** re-opens such a directory against the chosen image directory. The names
+and mask resolutions must correspond to the images; a structurally invalid directory reports
+**"Bad Format"** and a non-corresponding one reports an error, each returning to the chooser. Loaded
+metrics come straight from `summary.csv` (no re-segmentation), so manual mask edits are preserved.
+
+Closing the app (window close or **Quit**), or starting a new **Load**, while there are unsaved
+changes — new or edited masks, `Pin`/`Use` changes, or an in-progress edit — prompts
+**"Save changes?"** with **Save** (finishing any open edit first), **Discard**, or **Cancel** (stay
+where you are). The status strip along the bottom shows the last save (with a timestamp) for the
+current dataset, and is cleared when a new dataset is loaded.
 
 **Checkpoints are preconfigured, not committed.** Trained checkpoints and `outputs/` are gitignored
 local artifacts, so the app is **not runnable on a clean checkout** — edit the two `(run_dir, ckpt)`

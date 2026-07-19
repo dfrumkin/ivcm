@@ -30,7 +30,10 @@ class ResultsTableModel(QAbstractTableModel):
 
     ``on_pin(record, now_checked)`` runs the pin-toggle's consequences; ``on_pin_rejected`` shows
     the "at most three pins" pop-up when a fourth pin is attempted (also deferred, so no modal
-    dialog opens on the edit path).
+    dialog opens on the edit path). ``on_dirty`` is invoked **synchronously** the instant a checkbox
+    edit flips a record field -- before the deferred ``on_toggle``/``on_pin`` handler runs -- so the
+    main window's unsaved-changes flag reflects the change even if the app is closed before the
+    timer callback fires.
     """
 
     def __init__(
@@ -39,12 +42,14 @@ class ResultsTableModel(QAbstractTableModel):
         on_toggle: Callable[[ImageRecord], None],
         on_pin: Callable[[ImageRecord, bool], None],
         on_pin_rejected: Callable[[], None],
+        on_dirty: Callable[[], None],
     ) -> None:
         super().__init__()
         self._records = records
         self._on_toggle = on_toggle
         self._on_pin = on_pin
         self._on_pin_rejected = on_pin_rejected
+        self._on_dirty = on_dirty
 
     def refresh(self) -> None:
         """Re-read the (possibly re-sorted) record list into the view."""
@@ -101,6 +106,7 @@ class ResultsTableModel(QAbstractTableModel):
         record.pinned = checked
         if checked:
             record.is_nerve = True  # pinning forces "use"
+        self._on_dirty()  # synchronous: mark unsaved now, before the deferred handler
         self._emit_row_changed(row)  # pin, use, and the metric columns can all change
         QTimer.singleShot(0, lambda: self._on_pin(record, checked))
         return True
@@ -110,6 +116,7 @@ class ResultsTableModel(QAbstractTableModel):
         record.is_nerve = checked
         if not checked:
             record.pinned = False  # unchecking Use always unpins
+        self._on_dirty()  # synchronous: mark unsaved now, before the deferred handler
         self._emit_row_changed(row)
         QTimer.singleShot(0, lambda: self._on_toggle(record))
         return True

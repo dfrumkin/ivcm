@@ -5,11 +5,13 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime
 from pathlib import Path
+from typing import cast
 
 import numpy as np
 from PySide6.QtCore import QModelIndex, QSize, Qt
-from PySide6.QtGui import QAction, QCloseEvent, QIcon, QPainter, QPixmap
+from PySide6.QtGui import QAction, QCloseEvent, QIcon, QKeySequence, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -32,6 +34,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from ivcm.app import persistence
 from ivcm.app.batch import ensure_all_square, process_directory
 from ivcm.app.editing import EditHistory, mask_changed, raise_slider_to_floor
 from ivcm.app.inference import InferenceEngine, load_image
@@ -39,6 +42,7 @@ from ivcm.app.mask_slider import alpha_from_slider, make_mask_slider, slider_fro
 from ivcm.app.overlay_dialog import OverlayDialog
 from ivcm.app.preview import PREVIEW_MAX, EditablePreview
 from ivcm.app.records import MAX_PINNED, ImageRecord, pinned_count, selection_after_toggle, sort_key, top3
+from ivcm.app.save_dialog import SaveDirectoryDialog
 from ivcm.app.summary_panel import SummaryPanel
 from ivcm.app.table_model import ResultsTableModel
 from ivcm.app.top3_window import Top3Window
@@ -71,6 +75,15 @@ class MainWindow(QMainWindow):
         self.engine = engine
         self.records: list[ImageRecord] = []
 
+        # Persistence session state (see the Load/Save methods). ``_image_dir`` is the loaded image
+        # directory; ``_loaded_label_dir`` is the label dir a Load came from (drives the Save As
+        # pre-fill); ``_save_target`` is the confirmed directory saved to this session (drives silent
+        # re-saves); ``_dirty`` tracks unsaved changes for the close guard.
+        self._image_dir: Path | None = None
+        self._loaded_label_dir: Path | None = None
+        self._save_target: Path | None = None
+        self._dirty = False
+
         # Mask-editing state (see the "editing mode" methods). The preview widget owns the working
         # mask while editing; the main window holds only the surrounding session state.
         self._editing = False
@@ -78,7 +91,9 @@ class MainWindow(QMainWindow):
         self._original_mask: np.ndarray | None = None
         self._history: EditHistory | None = None
 
-        self.model = ResultsTableModel(self.records, self._on_toggle, self._on_pin, self._on_pin_rejected)
+        self.model = ResultsTableModel(
+            self.records, self._on_toggle, self._on_pin, self._on_pin_rejected, self._mark_dirty
+        )
         self.table = QTableView()
         self.table.setModel(self.model)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
@@ -119,6 +134,7 @@ class MainWindow(QMainWindow):
         self.top3_window.pin_requested.connect(self._on_pin_from_top3)
         self.top3_window.unpin_requested.connect(self._on_unpin_from_top3)
         self.top3_window.dont_use_requested.connect(self._on_dont_use_from_top3)
+        self.top3_window.save_requested.connect(self._on_save_shortcut)
 
         self._build_toolbar()
         self._update_preview()  # nothing selected yet: placeholder, Edit + blender disabled
@@ -159,17 +175,32 @@ class MainWindow(QMainWindow):
         self.toolbar = toolbar  # kept so editing mode can grey out the "top menu"
         self.addToolBar(toolbar)
 
-        open_action = QAction("Choose / switch directory", self)
-        open_action.triggered.connect(self._open_directory)
-        toolbar.addAction(open_action)
+        # "Load" starts the load flow; it is highlighted (bold) until a dataset is loaded/created so
+        # the doctor sees where to begin.
+        self._load_action = QAction("Load", self)
+        self._load_action.triggered.connect(self._on_load)
+        toolbar.addAction(self._load_action)
 
-        top3_action = QAction("Top-3 window", self)
-        top3_action.triggered.connect(self._show_top3)
-        toolbar.addAction(top3_action)
+        # "Save" (Cmd+S) writes the current results; disabled until there is something to save.
+        self._save_action = QAction("Save", self)
+        self._save_action.setShortcut(QKeySequence.StandardKey.Save)
+        self._save_action.setEnabled(False)
+        self._save_action.triggered.connect(self._on_save)
+        toolbar.addAction(self._save_action)
 
+        # "Top 3" opens the synced window; disabled until there is data to show.
+        self._top3_action = QAction("Top 3", self)
+        self._top3_action.setEnabled(False)
+        self._top3_action.triggered.connect(self._show_top3)
+        toolbar.addAction(self._top3_action)
+
+        # Route Quit through the window's close (and thus the unsaved-changes guard); a direct
+        # QApplication.quit() exits the event loop without delivering a close event.
         quit_action = QAction("Quit", self)
-        quit_action.triggered.connect(QApplication.quit)
+        quit_action.triggered.connect(self.close)
         toolbar.addAction(quit_action)
+
+        self._set_load_highlight(True)
 
     def _build_edit_controls(self) -> QStackedWidget:
         """The Edit-button ⇄ edit-toolbar container shown under the preview.
@@ -227,7 +258,7 @@ class MainWindow(QMainWindow):
         return stack
 
     def _icon_button(
-        self, theme: str, fallback: QStyle.StandardPixmap, tip: str, on_click: Callable[[], None]
+        self, theme: str, fallback: QStyle.StandardPixmap, tip: str, on_click: Callable[[], object]
     ) -> QToolButton:
         """A small icon tool button, preferring a themed icon and falling back to a standard pixmap."""
         icon = QIcon.fromTheme(theme)
@@ -275,19 +306,198 @@ class MainWindow(QMainWindow):
         return line
 
     def closeEvent(self, event: QCloseEvent) -> None:
-        # The top-3 window is a separate top-level window; close it too so closing the main
-        # window (X or Quit) actually exits the app rather than leaving it running headless.
-        self.top3_window.close()
-        super().closeEvent(event)
+        # Guard against losing unsaved changes on close (window-X or Quit). The top-3 window is
+        # closed only on a path that actually exits, so a Cancel leaves the app exactly as it was.
+        if self._resolve_unsaved_changes():
+            self.top3_window.close()
+            super().closeEvent(event)
+        else:
+            event.ignore()
+
+    def _resolve_unsaved_changes(self) -> bool:
+        """Guard unsaved changes before a close or a new Load; ``True`` to proceed, ``False`` to abort.
+
+        With no unsaved changes, proceed immediately. Otherwise present the Save/Discard/Cancel
+        prompt: **Save** finishes any in-progress edit and saves (proceeding only if that succeeds),
+        **Discard** drops any in-progress edit and proceeds, **Cancel** aborts (stay exactly as we
+        were). Shared by ``closeEvent`` and ``_on_load`` so a new Load is treated like a close.
+        """
+        if not self._has_unsaved_changes():
+            return True
+        choice = self._ask_save_changes()
+        if choice == "cancel":
+            return False
+        if choice == "save":
+            return self._finish_edit_and_save()  # False if the edit-commit or the save was aborted
+        # Discard: drop an in-progress edit; any committed changes are simply left to be replaced.
+        if self._editing:
+            self._exit_edit()
+            self._update_preview()
+        return True
+
+    def _has_unsaved_changes(self) -> bool:
+        """Whether there are unsaved changes: committed edits (``_dirty``) or a modified live edit."""
+        if self._dirty:
+            return True
+        if self._editing:
+            working = self.preview.working_mask()
+            if working is not None and self._original_mask is not None and mask_changed(working, self._original_mask):
+                return True
+        return False
+
+    def _ask_save_changes(self) -> str:
+        """The "Save changes?" prompt; returns ``"save"`` / ``"discard"`` / ``"cancel"``."""
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setWindowTitle("ivcm")
+        box.setText("Save changes?")
+        save = box.addButton("Save", QMessageBox.ButtonRole.AcceptRole)
+        discard = box.addButton("Discard", QMessageBox.ButtonRole.DestructiveRole)
+        cancel = box.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
+        box.setDefaultButton(cancel)
+        box.exec()
+        clicked = box.clickedButton()
+        if clicked is save:
+            return "save"
+        if clicked is discard:
+            return "discard"
+        return "cancel"
+
+    def _finish_edit_and_save(self) -> bool:
+        """Finish any in-progress edit, then save; ``True`` only if both succeed (else abort)."""
+        if self._editing:
+            working = self.preview.working_mask()
+            changed = (
+                working is not None and self._original_mask is not None and mask_changed(working, self._original_mask)
+            )
+            if changed:
+                if not self._keep_edit():  # morphometry failed: stay in edit, abort
+                    return False
+            else:
+                # An untouched edit: leaving it via Keep would set an all-zero mask and force Use, an
+                # unwanted mutation — just leave edit mode and save the already-committed state.
+                self._exit_edit()
+                self._update_preview()
+        return self._on_save()
+
+    def _mark_dirty(self) -> None:
+        """Mark the in-memory state as having unsaved changes (drives the close guard)."""
+        self._dirty = True
+
+    def _set_load_highlight(self, on: bool) -> None:
+        """Bold (or un-bold) the Load toolbar button to signal it is the starting point."""
+        # widgetForAction is typed non-optional in the stubs but can be None before the button
+        # widget is realized; guard defensively.
+        button = cast("QWidget | None", self.toolbar.widgetForAction(self._load_action))
+        if button is not None:
+            font = button.font()
+            font.setBold(on)
+            button.setFont(font)
+
+    # --- load / create ---------------------------------------------------
+
+    def _on_load(self) -> None:
+        """Load flow: choose an image directory, then load existing labels or create fresh ones."""
+        # A new Load replaces the current dataset, so guard unsaved changes just like a close: the
+        # user may Save (updating the last-save strip), Discard, or Cancel (stay where we were).
+        if not self._resolve_unsaved_changes():
+            return
+        start_dir = str(self._image_dir) if self._image_dir is not None else ""
+        while True:
+            directory = QFileDialog.getExistingDirectory(self, "Choose image directory", start_dir)
+            if not directory:
+                return  # abort: leave the current view unchanged
+            image_dir = Path(directory)
+            start_dir = str(image_dir)  # reopen here if we come back from the labels dialog
+            if self._labels_choice_loop(image_dir):
+                return
+
+    def _labels_choice_loop(self, image_dir: Path) -> bool:
+        """The "Load or create labels?" step; ``True`` when done, ``False`` to reopen the image chooser."""
+        while True:
+            choice = self._ask_load_or_create()
+            if choice == "cancel":
+                return False  # back to the image chooser
+            if choice == "create":
+                self._create_labels(image_dir)
+                return True
+            if self._label_dir_loop(image_dir):
+                return True  # loaded successfully
+            # the label-directory chooser was cancelled: back to "Load or create labels?"
+
+    def _label_dir_loop(self, image_dir: Path) -> bool:
+        """Choose and validate a label directory; ``True`` on success, ``False`` if cancelled."""
+        # Start alongside the image directory (its parent), where a sibling label directory lives,
+        # rather than inside the image directory itself.
+        start_dir = str(image_dir.parent)
+        while True:
+            directory = QFileDialog.getExistingDirectory(self, "Choose label directory", start_dir)
+            if not directory:
+                return False  # back to "Load or create labels?"
+            label_dir = Path(directory)
+            start_dir = str(label_dir)
+            try:
+                records, normalized = persistence.load_labels(
+                    image_dir, label_dir, self.engine.config.accepted_extensions
+                )
+            except persistence.BadLabelFormatError as exc:
+                log.info("Bad label format in %s: %s", label_dir, exc)
+                self._info_box("Bad Format", "This directory is not a valid label directory.")
+                continue  # reopen the label-directory chooser
+            except persistence.LabelMismatchError as exc:
+                log.info("Label mismatch in %s: %s", label_dir, exc)
+                self._info_box("Load error", "These labels do not match the images (names or resolutions differ).")
+                continue
+            self._apply_loaded(records, image_dir, label_dir, normalized)
+            return True
+
+    def _ask_load_or_create(self) -> str:
+        """The "Load or create labels?" prompt; returns ``"load"`` / ``"create"`` / ``"cancel"``."""
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Question)
+        box.setWindowTitle("ivcm")
+        box.setText("Load or create labels?")
+        load = box.addButton("Load", QMessageBox.ButtonRole.AcceptRole)
+        create = box.addButton("Create", QMessageBox.ButtonRole.AcceptRole)
+        cancel = box.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
+        box.setDefaultButton(cancel)
+        box.exec()
+        clicked = box.clickedButton()
+        if clicked is load:
+            return "load"
+        if clicked is create:
+            return "create"
+        return "cancel"
+
+    def _create_labels(self, image_dir: Path) -> None:
+        """Run the classify/segment batch on ``image_dir``, then record fresh (unsaved) dataset state."""
+        if self._run_batch(image_dir):
+            self._mark_dataset_state(image_dir, loaded_label_dir=None, dirty=True)
+
+    def _apply_loaded(self, records: list[ImageRecord], image_dir: Path, label_dir: Path, normalized: bool) -> None:
+        """Apply a loaded label directory: install the records and record the dataset state."""
+        self.records[:] = records
+        self._resort_and_refresh(lambda _recs: None)  # loaded dataset: leave no selection
+        self._show_top3()
+        self._mark_dataset_state(image_dir, loaded_label_dir=label_dir, dirty=normalized)
+
+    def _mark_dataset_state(self, image_dir: Path, loaded_label_dir: Path | None, dirty: bool) -> None:
+        """Record the dataset session state shared by Create and Load, and enable Save."""
+        self._image_dir = image_dir
+        self._loaded_label_dir = loaded_label_dir
+        self._save_target = None  # first Save always asks for a location (load source may be read-only)
+        self._dirty = dirty
+        self._set_load_highlight(False)
+        self._save_action.setEnabled(True)
+        self._top3_action.setEnabled(True)
+        # The status strip reflects the current dataset's save state; a freshly loaded/created
+        # dataset has not been saved this session, so clear any prior save message.
+        self.statusBar().clearMessage()
 
     # --- directory batch -------------------------------------------------
 
-    def _open_directory(self) -> None:
-        directory = QFileDialog.getExistingDirectory(self, "Choose image directory")
-        if directory:
-            self._load_directory(Path(directory))
-
-    def _load_directory(self, directory: Path) -> None:
+    def _run_batch(self, directory: Path) -> bool:
+        """Classify/segment/measure ``directory`` into ``self.records``; ``False`` if a non-square abort."""
         extensions = self.engine.config.accepted_extensions
         files = sorted(p for p in directory.iterdir() if p.is_file() and p.suffix.lower() in extensions)
 
@@ -301,7 +511,7 @@ class MainWindow(QMainWindow):
             log.error("Non-square image in %s: %s", directory, exc)
             QMessageBox.critical(self, "ivcm — non-square image", str(exc))
             QApplication.exit(1)  # schedule non-zero exit; return so no state is cleared / batch run
-            return
+            return False
 
         # Clear current state before the batch so no selection/row from the previous directory
         # carries over by position into the new one (matches the plan's "clears the records").
@@ -339,12 +549,114 @@ class MainWindow(QMainWindow):
         self._resort_and_refresh(lambda _recs: None)  # fresh batch: leave no selection
         self._show_top3()
 
-        message = f"Loaded {len(records)} image(s) from {directory}."
-        if skipped:
-            message += f" Skipped {len(skipped)} (load/classify failed): {', '.join(skipped)}."
-        if seg_failed:
-            message += f" Segmentation failed (left unchecked) for {len(seg_failed)}: {', '.join(seg_failed)}."
-        self.statusBar().showMessage(message)
+        # The status strip is reserved for the current dataset's save state, so batch problems are
+        # surfaced in a dialog (only when there are any) rather than left in the strip.
+        if skipped or seg_failed:
+            parts: list[str] = []
+            if skipped:
+                parts.append(f"Skipped {len(skipped)} (load/classify failed): {', '.join(skipped)}.")
+            if seg_failed:
+                parts.append(f"Segmentation failed (left unchecked) for {len(seg_failed)}: {', '.join(seg_failed)}.")
+            self._info_box("Some images were not processed", " ".join(parts))
+        return True
+
+    # --- save ------------------------------------------------------------
+
+    def _on_save_shortcut(self) -> None:
+        """The save shortcut fired in the top-3 window; save only when the Save action is enabled.
+
+        Mirrors the main window's Save action gating (no data loaded, or an edit in progress), which
+        a shortcut on a separate window would otherwise bypass.
+        """
+        if self._save_action.isEnabled():
+            self._on_save()
+
+    def _on_save(self) -> bool:
+        """Save the current records; ``True`` if written, ``False`` if cancelled or failed."""
+        if self._save_target is not None:
+            # Silent re-save, but never delete a directory that is no longer in our label-dir shape.
+            if not self._save_target.exists():
+                return self._write_to(self._save_target)
+            if persistence.is_overwritable_label_dir(self._save_target):
+                return self._write_to(self._save_target)
+            # The save target now holds non-label content: fall through to the interactive flow.
+        return self._save_as()
+
+    def _save_as(self) -> bool:
+        """The first-save "Save As" interaction: choose a target directory and handle existing ones."""
+        if self._loaded_label_dir is not None:
+            start_dir = self._loaded_label_dir.parent
+            suggested = self._loaded_label_dir.name
+        elif self._image_dir is not None:
+            start_dir = self._image_dir.parent
+            suggested = f"{self._image_dir.name}_labels"
+        else:
+            return False  # nothing loaded: nothing to save
+        while True:
+            target = self._ask_save_target(start_dir, suggested)
+            if target is None:
+                return False  # cancelled
+            if not target.exists():
+                return self._write_to(target)
+            if persistence.is_overwritable_label_dir(target):
+                if self._confirm_overwrite(target):
+                    return self._write_to(target)
+            else:
+                self._info_box(
+                    "Cannot overwrite",
+                    "The target directory already exists and is not a label directory, so it will not be overwritten.",
+                )
+            start_dir, suggested = target.parent, target.name  # reopen where we left off
+
+    def _ask_save_target(self, start_dir: Path, suggested: str) -> Path | None:
+        """Single-window Save dialog (navigate + type a name); the chosen path or ``None``.
+
+        A plain file dialog in save mode reinterprets a typed name that matches an existing folder as
+        "open it", so it can never return an existing directory for overwriting. ``SaveDirectoryDialog``
+        keeps one always-"Save" button, so an existing name comes back as a normal path and the
+        overwrite/update flow works.
+        """
+        dialog = SaveDirectoryDialog(self, start_dir, suggested)
+        if dialog.exec():
+            return dialog.selected_path()
+        return None
+
+    def _write_to(self, target: Path) -> bool:
+        """Write the records to ``target``; on success confirm it and clear the dirty flag."""
+        try:
+            persistence.write_labels(target, self.records)
+        except Exception:
+            log.exception("Save failed for %s", target)
+            self._info_box("Save failed", f"Could not save to {target}.")
+            return False
+        self._save_target = target
+        self._dirty = False
+        # Include a second-precision timestamp so each save updates the message (even a silent
+        # re-save to the same target) and the last-save time is visible at a glance.
+        self.statusBar().showMessage(f"Saved labels to {target} at {datetime.now():%Y-%m-%d %H:%M:%S}.")
+        return True
+
+    def _confirm_overwrite(self, target: Path) -> bool:
+        """The "target directory already exists" Overwrite / Cancel prompt for an our-format dir."""
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setWindowTitle("ivcm")
+        box.setText("The target directory already exists")
+        box.setInformativeText(str(target))
+        overwrite = box.addButton("Overwrite", QMessageBox.ButtonRole.DestructiveRole)
+        cancel = box.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
+        box.setDefaultButton(cancel)
+        box.exec()
+        return box.clickedButton() is overwrite
+
+    def _info_box(self, title: str, text: str) -> None:
+        """A single-OK message box (bad-format / mismatch / dangerous-overwrite / save-failure)."""
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setWindowTitle(title)
+        box.setText(text)
+        box.setStandardButtons(QMessageBox.StandardButton.Ok)
+        box.exec()
 
     # --- checkbox / top-3 ------------------------------------------------
 
@@ -421,6 +733,7 @@ class MainWindow(QMainWindow):
         if not record.pinned and pinned_count(self.records) >= MAX_PINNED:
             self._on_pin_rejected()
             return
+        self._mark_dirty()
         prior_row = self.table.currentIndex().row()
         record.pinned = True
         record.is_nerve = True  # pinning forces "use"
@@ -431,12 +744,14 @@ class MainWindow(QMainWindow):
 
     def _on_unpin_from_top3(self, record: ImageRecord) -> None:
         """ "Unpin" in the top-3 window is exactly unchecking Pin in the table (keeps row position)."""
+        self._mark_dirty()
         prior_row = self.table.currentIndex().row()
         record.pinned = False
         self._resort_and_refresh(lambda recs: selection_after_toggle(recs, record, False, prior_row))
 
     def _on_dont_use_from_top3(self, record: ImageRecord) -> None:
         """ "Don't Use" is exactly unchecking Use in the table (also unpins; keeps row position)."""
+        self._mark_dirty()
         prior_row = self.table.currentIndex().row()
         record.is_nerve = False
         record.pinned = False
@@ -530,6 +845,10 @@ class MainWindow(QMainWindow):
         self.table.setEnabled(not frozen)
         self.toolbar.setEnabled(not frozen)
         self.top3_window.setEnabled(not frozen)
+        # Disable the Save action itself (not just its toolbar button) so the Cmd+S shortcut is
+        # inert during an edit; editing is only reachable once a dataset is loaded, so re-enabling
+        # on unfreeze is always correct.
+        self._save_action.setEnabled(not frozen)
 
     def _on_edit_started(self) -> None:
         """First press of a stroke: raise the blender to at least 0.5 so the mask is visible."""
@@ -564,23 +883,28 @@ class MainWindow(QMainWindow):
         self._undo_button.setEnabled(self._history is not None and self._history.can_undo())
         self._redo_button.setEnabled(self._history is not None and self._history.can_redo())
 
-    def _keep_edit(self) -> None:
-        """Commit the working mask in memory: metrics first (so a failure leaves the record intact)."""
+    def _keep_edit(self) -> bool:
+        """Commit the working mask in memory: metrics first (so a failure leaves the record intact).
+
+        Returns whether the commit succeeded, so the close guard can abort the exit on a failure.
+        """
         record = self._edit_record
         working = self.preview.working_mask()
         if record is None or working is None:
-            return
+            return False
         try:
             metrics = self.engine.morphometry(working)
         except Exception:
             log.exception("Morphometry failed for %s", record.name)
             self.statusBar().showMessage(f"Morphometry failed for {record.name}; edit left open.")
-            return  # stay in edit mode; the doctor's mask is preserved
+            return False  # stay in edit mode; the doctor's mask is preserved
         record.metrics = metrics
         record.mask = working
         record.is_nerve = True
+        self._mark_dirty()
         self._exit_edit()
         self._resort_and_refresh(lambda recs: recs.index(record))
+        return True
 
     def _discard_edit(self) -> None:
         """Discard the working mask, confirming first if it differs from the edit-start mask."""
