@@ -4,6 +4,10 @@ _target_: ivcm.data.BaseDataModule
 batch_size: 8
 num_workers: 0
 class_names: ${class_names}
+# Inverse-frequency class weighting is derived from the train dataset's per-class counts and applied
+# automatically when the dataset exposes them; the synthetic dataset does not, so this is a no-op here.
+# Present so `data.weighted_loss=false` composes under Hydra struct mode.
+weighted_loss: true
 train_dataset:
   _target_: ivcm.data.SyntheticClassificationDataset
   num_samples: 64

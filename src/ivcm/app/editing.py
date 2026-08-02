@@ -10,7 +10,7 @@ carries no Qt dependency.
 from __future__ import annotations
 
 import math
-from typing import Literal, NamedTuple
+from typing import Literal, NamedTuple, cast
 
 import numpy as np
 
@@ -94,9 +94,10 @@ def stamp_disk(mask: np.ndarray, row: float, col: float, radius: float, value: i
     c1 = min(width, int(math.ceil(col + radius)) + 1)
     if r0 >= r1 or c0 >= c1:
         return
-    rr = np.arange(r0, r1)[:, None]
-    cc = np.arange(c0, c1)[None, :]
-    disk = (rr - row) ** 2 + (cc - col) ** 2 <= radius**2
+    # cast at the numpy boundary: np.arange(start, stop) / broadcast ops type as Unknown here.
+    rr = cast("np.ndarray", np.arange(r0, r1)[:, None])
+    cc = cast("np.ndarray", np.arange(c0, c1)[None, :])
+    disk = cast("np.ndarray", (rr - row) ** 2 + (cc - col) ** 2 <= radius**2)
     mask[r0:r1, c0:c1][disk] = value
 
 

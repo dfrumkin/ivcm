@@ -10,7 +10,7 @@ defaults:
 
 # Single source of truth for the classes; the class count is derived as
 # ${len:${class_names}}. Order fixes the per-class metric indices.
-class_names: [endothelium, epithelium, nerves, stroma]
+class_names: [endothelium, epithelium, nerves, stroma, gel]
 
 # Metric the best-checkpoint callback (`callbacks=default`) monitors for this task.
 checkpoint_monitor: val/auc_macro

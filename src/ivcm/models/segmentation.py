@@ -114,16 +114,23 @@ class SegmentationModule(BaseModule):
         batch: Batch,
         logits_fn: Callable[[torch.Tensor], torch.Tensor],
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-        """Shared loss/metric extraction. ``logits_fn`` maps images to ``(B, C, H, W)`` logits:
+        """Shared loss/metric extraction. ``logits_fn`` maps images to ``(B, 2, H, W)`` logits:
         a direct forward in training (inputs are already ``roi_size`` crops), a sliding-window
-        forward in validation (inputs are full native-resolution images)."""
+        forward in validation (inputs are full native-resolution images).
+
+        The mask arrives as a float **foreground probability** ``p`` in ``{0, 0.5, 1}`` (``0.5`` where
+        two annotators disagree). The loss consumes ``p`` directly (soft target); the metrics consume
+        a hard target ``(p >= 0.5)`` — foreground = a pixel *either* annotator marked (union)."""
         images, masks = batch
-        masks = masks.long()  # Dice/CE losses and the metrics require integer targets.
-        logits = logits_fn(images)  # (B, C, H, W)
-        loss = self.criterion(logits, masks)
+        logits = logits_fn(images)  # (B, 2, H, W)
+        if logits.shape[1] != 2:
+            raise ValueError(f"binary segmentation expects 2 output channels; got {logits.shape[1]}.")
+        p = masks.to(device=logits.device, dtype=logits.dtype)  # (B, H, W) foreground prob
+        loss = self.criterion(logits, p)
+        hard = (p >= 0.5).long()  # metric target (union): 1 where either annotator marked foreground
         preds = logits.argmax(dim=1)
         fg_prob = logits.softmax(dim=1)[:, 1]  # foreground (nerve) probability, (B, H, W)
-        return loss, preds, fg_prob, masks
+        return loss, preds, fg_prob, hard
 
     def _sliding_window_logits(self, images: torch.Tensor) -> torch.Tensor:
         """Full-image logits via sliding-window inference over ``roi_size`` windows."""

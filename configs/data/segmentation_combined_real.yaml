@@ -1,0 +1,12 @@
+# Real segmentation data, mode (c): patient-grouped 5-fold CV over data/segmentation2, with the whole
+# data/segmentation volume kept entirely in training (it has no patient ids to split on). Validation
+# is only the held-out data/segmentation2 patients, so reported metrics are patient-held-out.
+_target_: ivcm.data.Segmentation2CVDataModule
+root: ${data_dir}/segmentation2
+images_path: ${data_dir}/segmentation/imgs.nii
+masks_path: ${data_dir}/segmentation/mask_gt.nii
+n_folds: 5
+fold: 0
+batch_size: 4
+num_workers: 0
+crop_size: ${crop_size}

@@ -55,7 +55,10 @@ def _trainer() -> L.Trainer:
 def test_classification_real() -> None:
     cfg = _compose("task=classification", "data=classification_real")
     datamodule = instantiate(cfg.data)
-    assert datamodule.class_names == ["endothelium", "epithelium", "nerves", "stroma"]
+    assert datamodule.class_names == ["endothelium", "epithelium", "nerves", "stroma", "gel"]
+    # Weighting is automatic on real data: the datamodule derives per-class weights from the train set.
+    assert datamodule.class_weights is not None
+    assert datamodule.class_weights.shape[0] == 5
 
     trainer = _trainer()
     trainer.fit(_build_model(cfg), datamodule=datamodule)
@@ -75,6 +78,16 @@ def test_segmentation_real_cv_split() -> None:
     union = train_idx | val_idx
     assert union == set(range(len(union)))
 
+    trainer = _trainer()
+    trainer.fit(_build_model(cfg), datamodule=datamodule)
+    loss = trainer.callback_metrics.get("train/loss_step", trainer.callback_metrics.get("train/loss"))
+    assert loss is not None and torch.isfinite(loss)
+
+
+@pytest.mark.parametrize("data", ["segmentation2_real", "segmentation_combined_real"])
+def test_segmentation_new_modes_real_smoke(data: str) -> None:
+    cfg = _compose("task=segmentation", f"data={data}")
+    datamodule = instantiate(cfg.data)
     trainer = _trainer()
     trainer.fit(_build_model(cfg), datamodule=datamodule)
     loss = trainer.callback_metrics.get("train/loss_step", trainer.callback_metrics.get("train/loss"))

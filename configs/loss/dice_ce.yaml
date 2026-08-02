@@ -1,0 +1,5 @@
+# Segmentation loss: soft Dice + cross-entropy combo on the soft two-annotator target.
+# Consumes (logits, p) where p is a (B, H, W) foreground probability in {0, 0.5, 1}.
+_target_: ivcm.models.SegDiceCELoss
+dice_weight: 1.0
+ce_weight: 1.0

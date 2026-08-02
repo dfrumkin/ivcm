@@ -4,6 +4,9 @@ _target_: ivcm.data.BaseDataModule
 batch_size: 8
 num_workers: 0
 class_names: ${class_names}
+# Apply inverse-frequency class weighting from the train set's per-class counts (imbalance handling).
+# Set false to disable (e.g. an ablation).
+weighted_loss: true
 train_dataset:
   _target_: ivcm.data.ClassificationImageDataset
   root: ${data_dir}/classification/train

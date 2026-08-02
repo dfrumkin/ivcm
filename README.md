@@ -156,12 +156,28 @@ encoders).
 
 The real data is a **proprietary dataset** under `data/` (gitignored, not committed):
 
-- **Classification** — 4 classes (`endothelium`, `epithelium`, `nerves`, `stroma`) with a
-  fixed `train/`/`val/` split and no test set. Reports per-class **sensitivity,
-  specificity, and AUC** on the validation set.
-- **Segmentation** — binary nerve-vs-background, from a single volume pair. The slices are
-  split into **5 contiguous folds** for cross-validation (4 train / 1 val per run);
-  reports per-fold and **mean** Dice/IoU, AUPRC/AUC, and sensitivity/specificity.
+- **Classification** — 5 classes (`endothelium`, `epithelium`, `nerves`, `stroma`, `gel`) with a
+  fixed `train/`/`val/` split and no test set. Reports per-class **sensitivity, specificity, and
+  AUC** on the validation set, plus a **confusion matrix** printed to the run log each validation
+  epoch. **Class imbalance is handled automatically on real data**: inverse-frequency class weights
+  are derived from the training set's per-class counts and applied to the cross-entropy loss (a
+  no-op for the balanced synthetic default). Disable with `data.weighted_loss=false`.
+- **Segmentation** — binary dendritic-cell foreground vs. background on subbasal-nerve-plexus
+  slices, trainable in **three cross-validation modes** (all with the soft Dice + cross-entropy
+  loss):
+  - `data=segmentation_real` **(default)** — the single `data/segmentation` volume pair, split into
+    **5 contiguous slice folds** (4 train / 1 val).
+  - `data=segmentation2_real` — the per-patient `data/segmentation2` set (two-annotator masks),
+    **5-fold cross-validation grouped by patient** (whole patients held out per fold).
+  - `data=segmentation_combined_real` — both: `data/segmentation` is kept **entirely in training**
+    in every fold (it has no patient ids to split on) while validation is only the held-out
+    `data/segmentation2` patients, so reported metrics are patient-held-out.
+
+  The `data/segmentation2` ground truth fuses two annotators: `1`/`0` where they agree, `0.5` where
+  they disagree; a single-annotator instance (no `gt2.png`) is `0`/`1` as if the second agreed. For
+  metrics the soft mask is thresholded at `>= 0.5` (union). All modes report per-fold and **mean**
+  Dice/IoU, AUPRC/AUC, and sensitivity/specificity. `data.batch_size` governs **training only** for
+  the patient modes; validation runs one native-resolution instance at a time.
 
 For each task the **default data is synthetic** (auto-generated, learnable signal), so the
 whole pipeline runs and is smoke-tested with **no data present**. Real data is opt-in.
@@ -171,12 +187,14 @@ whole pipeline runs and is smoke-tested with **no data present**. Real data is o
 uv run train task=classification
 uv run train task=segmentation
 
-# Real classification (fixed train/val split; per-class metrics on val):
+# Real classification (fixed train/val split; per-class metrics + confusion matrix; auto weighting):
 uv run train task=classification data=classification_real
 
-# Real segmentation 5-fold cross-validation (per-fold + mean metrics).
+# Real segmentation 5-fold cross-validation (per-fold + mean metrics). Pick a mode with `data=`:
 # Bare command = 3-epoch smoke default; for a real run see "Baseline runs" below:
-uv run cross-validate
+uv run cross-validate                                   # (a) single volume  [default]
+uv run cross-validate data=segmentation2_real           # (b) data/segmentation2, patient-grouped
+uv run cross-validate data=segmentation_combined_real   # (c) both (segmentation in training only)
 ```
 
 `task` has **no default** — `uv run train` errors until a task is chosen. The proprietary
@@ -244,12 +262,13 @@ The current "base setup" (no architecture/loss tuning) run for real on the propr
 with best-checkpoint saving and live W&B (requires `wandb login` / `WANDB_API_KEY`):
 
 ```bash
-# Classification baseline (real data, ~50 epochs, best-AUC checkpoint)
+# Classification baseline (real data, ~50 epochs, best-AUC checkpoint; class weighting is automatic)
 uv run train task=classification data=classification_real \
   callbacks=default logger.mode=online \
   trainer.max_epochs=50 data.num_workers=4
 
-# Segmentation baseline — 5-fold cross-validation (best-AUPRC checkpoint per fold)
+# Segmentation baseline — 5-fold cross-validation (best-AUPRC checkpoint per fold). Add
+# `data=segmentation2_real` or `data=segmentation_combined_real` to select mode (b) or (c).
 uv run cross-validate \
   callbacks=default logger.mode=online \
   trainer.max_epochs=50 data.num_workers=4
@@ -312,6 +331,10 @@ overlayable on `mask_gt.nii`). Each slice is predicted at its native resolution 
 sliding-window inference, so no resize is involved. It requires the CV to have been run with
 `callbacks=default` (so a monitored best checkpoint exists per fold).
 
+`predict-cv` supports **only the single-volume CV (mode (a), `data=segmentation_real`)** — the
+patient-grouped `segmentation2` / `combined` modes have no single out-of-fold volume to assemble, so
+it rejects those runs with a clear error.
+
 Unlike `train`/`cross-validate`, `predict-cv` is **not** a Hydra command: it reads the run's
 own saved `.hydra/config.yaml` (so the model, paths, `n_folds`, and `crop_size` match what was
 trained) and writes nothing into the run dir except `predictions.nii`. Two data-location
@@ -332,12 +355,18 @@ configs/
   train.yaml              # root for `train`: includes common, mandatory `task: ???`
   cv.yaml                 # root for `cross-validate`: segmentation + real CV data
   task/                   # classification | segmentation (class_names + composes groups)
-  data/                   # <task> = synthetic (default), <task>_real = proprietary data
-  model/ loss/            # per-task components
+  data/                   # <task> = synthetic (default); classification_real; segmentation_real (a),
+                          #   segmentation2_real (b), segmentation_combined_real (c)
+  model/ loss/            # per-task components (classification: cross_entropy; segmentation: dice_ce)
   optimizer/ scheduler/   # shared components
   trainer/ logger/        # Lightning Trainer + W&B logger (logger=none to disable)
   callbacks/              # none (default) | default = best-metric ModelCheckpoint + LR monitor
 ```
+
+**Compatibility note:** the segmentation loss is now the soft **Dice + cross-entropy** combo
+(`loss=dice_ce`); the old `loss=dice` (SMP multiclass Dice) config is **removed** — it consumed
+integer targets, incompatible with the new soft `(logits, p)` criterion contract. An old
+`loss=dice` override now errors rather than silently using the retired loss.
 
 ## Project layout
 

@@ -4,7 +4,7 @@
 defaults:
   - /data: segmentation
   - /model: segmentation
-  - /loss: dice
+  - /loss: dice_ce
   - /optimizer: adamw
   - /scheduler: cosine
 

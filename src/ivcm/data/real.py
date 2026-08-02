@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+import torch
 from PIL import Image
 from torch.utils.data import Dataset
 
@@ -38,6 +39,24 @@ def ensure_square(shape: Sequence[int], *, source: str) -> None:
         raise NonSquareImageError(
             f"Image {source} is not square: {height}×{width}. All inputs must be square (height == width)."
         )
+
+
+def inverse_frequency_weights(counts: Sequence[int]) -> torch.Tensor:
+    """Per-class cross-entropy weights = normalized inverse frequency.
+
+    ``w_c = total / (num_classes * count_c)``. The *sample-frequency-weighted* mean of the weights is
+    exactly 1 (``Σ count_c · w_c / total = 1``), so the overall loss scale stays comparable to the
+    unweighted case (the plain arithmetic mean of the weights is not necessarily 1). Raises a clear
+    error if any class has zero samples (its weight would divide by zero).
+    """
+    counts_arr = np.asarray(counts, dtype=np.float64)
+    if counts_arr.ndim != 1 or counts_arr.size == 0:
+        raise ValueError(f"counts must be a non-empty 1-D sequence of ints; got shape {counts_arr.shape}.")
+    if (counts_arr <= 0).any():
+        raise ValueError(f"every class must have at least one sample; got counts {list(counts)}.")
+    num_classes = counts_arr.size
+    weights = counts_arr.sum() / (num_classes * counts_arr)
+    return torch.tensor(weights, dtype=torch.float32)
 
 
 def contiguous_folds(n_slices: int, n_folds: int) -> list[np.ndarray]:
@@ -77,6 +96,17 @@ class ClassificationImageDataset(Dataset[tuple[Any, int]]):
     def __len__(self) -> int:
         return len(self.samples)
 
+    def class_counts(self, num_classes: int) -> list[int]:
+        """Per-class sample counts by label index, read from ``samples`` (no image decode).
+
+        Used by the datamodule to derive inverse-frequency loss weights. ``num_classes`` fixes the
+        output length so a class present in ``class_names`` but empty on disk reads as ``0``.
+        """
+        counts = [0] * num_classes
+        for _path, label in self.samples:
+            counts[label] += 1
+        return counts
+
     def __getitem__(self, index: int) -> tuple[Any, int]:
         path, label = self.samples[index]
         image = np.asarray(Image.open(path).convert("L"), dtype=np.float32) / 255.0
@@ -92,8 +122,9 @@ class NiiSegmentationDataset(Dataset[tuple[Any, Any]]):
 
     ``images``/``masks`` are full volumes of shape ``(H, W, n_slices)`` (loaded once by the
     datamodule and shared between the train/val datasets). ``slice_indices`` selects which
-    slices along the last axis belong to this split. The mask is binary (background vs.
-    nerve).
+    slices along the last axis belong to this split. The mask is returned as a **float32 foreground
+    probability** in ``{0.0, 1.0}`` (binarised background vs. nerve) so it stacks with the soft
+    ``data/segmentation2`` masks in a combined ``ConcatDataset`` and feeds the soft-target seg loss.
     """
 
     def __init__(
@@ -116,7 +147,93 @@ class NiiSegmentationDataset(Dataset[tuple[Any, Any]]):
         image = self.images[:, :, idx].astype(np.float32) / 255.0
         ensure_square(image.shape, source=f"slice {idx}")
         image = image[..., None]  # HWC, single channel
-        mask = self.masks[:, :, idx].astype(np.int64)
+        mask = (self.masks[:, :, idx] > 0).astype(np.float32)  # float32 foreground prob {0.0, 1.0}
+        if self.transform is not None:
+            out = self.transform(image=image, mask=mask)
+            image, mask = out["image"], out["mask"]
+        return image, mask
+
+
+def discover_segmentation2(root: str | Path) -> list[tuple[Path, str]]:
+    """Enumerate ``data/segmentation2`` instances as sorted ``(instance_dir, patient)`` pairs.
+
+    The tree is exactly ``<root>/<patient>/<instance>/``; ``patient`` is the instance dir's parent
+    folder name. Fails loudly (raises) on an instance directory missing ``image.png`` or ``gt.png``
+    (a missing label must surface, not silently shrink the dataset) and on an empty tree. ``gt2.png``
+    is optional (single-annotator instances).
+    """
+    root = Path(root)
+    if not root.is_dir():
+        raise ValueError(f"segmentation2 root {root} is not a directory.")
+    pairs: list[tuple[Path, str]] = []
+    for patient_dir in sorted(p for p in root.iterdir() if p.is_dir()):
+        for instance_dir in sorted(p for p in patient_dir.iterdir() if p.is_dir()):
+            if not (instance_dir / "image.png").is_file() or not (instance_dir / "gt.png").is_file():
+                raise ValueError(
+                    f"instance {instance_dir} is missing image.png or gt.png "
+                    "(every data/segmentation2 instance needs both)."
+                )
+            pairs.append((instance_dir, patient_dir.name))
+    if not pairs:
+        raise ValueError(f"no instances found under {root} (expected <root>/<patient>/<instance>/).")
+    return pairs
+
+
+def patient_folds(patients: Sequence[str], n_folds: int) -> list[np.ndarray]:
+    """Partition the *unique* patients into ``n_folds`` deterministic blocks (sorted, then split).
+
+    Mirrors :func:`contiguous_folds` but over patient ids: one block is a fold's validation patients,
+    the rest are training, so a whole patient stays on one side of the split (no per-frame leakage).
+    """
+    unique = np.array(sorted(set(patients)))
+    return np.array_split(unique, n_folds)
+
+
+class Segmentation2Dataset(Dataset[tuple[Any, Any]]):
+    """Per-instance two-annotator segmentation samples from ``data/segmentation2``.
+
+    Built from a list of instance directories (not the root), each holding ``image.png`` + ``gt.png``
+    (reader 1) and optionally ``gt2.png`` (reader 2). The target is a float32 foreground probability
+    ``p``: ``(r1 + r2) / 2`` when both readers are present (values ``{0, 0.5, 1}`` — ``0.5`` where they
+    disagree) or ``r1`` alone (``{0, 1}`` — a single annotator is treated as full agreement).
+    """
+
+    def __init__(self, instance_dirs: Sequence[Path], transform: Transform | None = None) -> None:
+        self.instance_dirs = list(instance_dirs)
+        self.transform = transform
+
+    def __len__(self) -> int:
+        return len(self.instance_dirs)
+
+    @staticmethod
+    def _binary_mask(path: Path) -> np.ndarray:
+        """Load a mask PNG as a 2-D ``{0.0, 1.0}`` float32 array.
+
+        ``convert("L")`` first so a palette/RGB PNG collapses to a single 2-D channel (keeping the
+        shape check meaningful); cast to float32 *before* averaging so ``r1 + r2`` counts annotators
+        (boolean ``+`` would OR, not add).
+        """
+        return (np.asarray(Image.open(path).convert("L")) > 0).astype(np.float32)
+
+    def __getitem__(self, index: int) -> tuple[Any, Any]:
+        instance = self.instance_dirs[index]
+        image = np.asarray(Image.open(instance / "image.png").convert("L"), dtype=np.float32) / 255.0
+        ensure_square(image.shape, source=str(instance / "image.png"))
+        r1 = self._binary_mask(instance / "gt.png")
+        gt2_path = instance / "gt2.png"
+        r2 = self._binary_mask(gt2_path) if gt2_path.is_file() else None
+
+        shapes: list[tuple[int, ...]] = [image.shape, r1.shape]
+        if r2 is not None:
+            shapes.append(r2.shape)
+        if len(set(shapes)) != 1:
+            raise ValueError(
+                f"image/gt/gt2 sizes disagree in {instance}: image {image.shape}, gt {r1.shape}"
+                + (f", gt2 {r2.shape}" if r2 is not None else "")
+            )
+
+        mask = (r1 + r2) / 2.0 if r2 is not None else r1  # {0, 0.5, 1} or {0, 1}
+        image = image[..., None]  # HWC, single channel
         if self.transform is not None:
             out = self.transform(image=image, mask=mask)
             image, mask = out["image"], out["mask"]

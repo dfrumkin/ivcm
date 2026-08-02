@@ -34,6 +34,18 @@ def test_cv_config_wiring():
     assert cfg.seed is not None  # run() reads cfg.seed unconditionally
 
 
+def test_cv_config_new_mode_overrides_compose():
+    """The `data=` override supersedes cv.yaml's `override /data`, selecting the patient-CV modes."""
+    with initialize_config_dir(config_dir=CONFIGS_DIR, version_base=None):
+        b = compose(config_name="cv", overrides=["data=segmentation2_real"])
+    assert b.data._target_.endswith("Segmentation2CVDataModule")
+
+    with initialize_config_dir(config_dir=CONFIGS_DIR, version_base=None):
+        c = compose(config_name="cv", overrides=["data=segmentation_combined_real"])
+    assert c.data._target_.endswith("Segmentation2CVDataModule")
+    assert "images_path" in c.data and "masks_path" in c.data
+
+
 def test_cv_config_resolves():
     """Full resolve (logger disabled to dodge ${hydra:...}) catches resolver/root-field gaps."""
     with initialize_config_dir(config_dir=CONFIGS_DIR, version_base=None):

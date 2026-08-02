@@ -232,3 +232,13 @@ def test_predict_fold_moves_batch_to_device_and_returns_numpy() -> None:
     assert isinstance(preds, np.ndarray)
     assert preds.shape == (n_slices, h, w)  # native H, W (sliding window over the full slice)
     assert preds.dtype == np.uint8
+
+
+def test_predict_cv_rejects_non_volume_modes(tmp_path: Path) -> None:
+    """predict-cv only supports the single-volume CV (mode a); the segmentation2/combined modes and a
+    missing data._target_ are rejected up front (before any cwd/device/path work)."""
+    for target in ("ivcm.data.Segmentation2CVDataModule", None):
+        data: dict[str, str] = {} if target is None else {"_target_": target}
+        cfg = OmegaConf.create({"data": data})
+        with pytest.raises(ValueError, match="single-volume"):
+            write_oof_predictions(cfg, tmp_path)

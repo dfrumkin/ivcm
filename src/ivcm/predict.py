@@ -148,6 +148,17 @@ def write_oof_predictions(cfg: DictConfig, cv_dir: Path) -> Path:
     Self-contained: pass only the loaded run config and the run dir. Device and launch cwd
     are derived internally so every fold shares one of each.
     """
+    # predict-cv only makes sense for the single-volume CV (mode (a)): it partitions one volume into
+    # contiguous folds. The segmentation2 / combined modes are patient-fold CV with no single volume
+    # to assemble (and combined even carries images/masks paths), so guard first — before any cwd /
+    # device / path work — and reject a missing _target_ the same way.
+    target = OmegaConf.select(cfg, "data._target_")
+    if not (isinstance(target, str) and target.endswith("SegmentationCVDataModule")):
+        raise ValueError(
+            "predict-cv supports only the single-volume CV run (mode (a), SegmentationCVDataModule); "
+            f"this run's data is {target!r}. The segmentation2 / combined modes are patient-fold "
+            "cross-validation with no single out-of-fold volume to assemble."
+        )
     cwd = _original_cwd(cv_dir)
     device = _select_device()
     log.info("Using device: %s", device)
