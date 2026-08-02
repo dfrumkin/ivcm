@@ -9,6 +9,13 @@ from this file's location — not the process cwd). Checkpoints and ``outputs/``
 local artifacts, so the app is not runnable on a clean checkout: edit ``CONFIG`` below to point
 at this machine's trained runs. A missing path produces a clear startup error (see
 ``ivcm.app.inference``).
+
+To consume a model trained on another machine, download that run's weights-only W&B artifact
+(``weights-<run id>``, containing ``best-weights.ckpt`` + ``.hydra/config.yaml``) and set
+``run_dir`` to the downloaded directory and ``ckpt`` to ``<dir>/best-weights.ckpt`` — using
+**absolute (or full repo-relative) paths for both**, since a relative path resolves against the
+repo root, not against ``run_dir``. The weights are CPU-portable (trained on CUDA, load on
+MPS/CPU). See the README's "Using a trained model in the UI".
 """
 
 from __future__ import annotations

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+from typing import cast
 
 import hydra
 import lightning as L
@@ -13,6 +14,7 @@ from lightning.pytorch.callbacks import ModelCheckpoint
 from omegaconf import DictConfig, OmegaConf, open_dict
 
 from ivcm.utils import configure_logging, stable_wandb_id, update_summary
+from ivcm.utils.wandb import load_best_checkpoint, log_best_weights_artifact, wandb_run_active
 
 log = logging.getLogger(__name__)
 
@@ -136,7 +138,39 @@ def run(cfg: DictConfig, run_dir: str | None = None) -> L.Trainer:
         # at the best-checkpoint values so it matches the checkpoint that is actually saved.
         best_val = {k: float(v) for k, v in trainer.callback_metrics.items() if k.startswith("val/")}
         update_summary(best_val)
+        # use_best is only True when ckpt_cb is our monitored ModelCheckpoint; re-narrow for pyright.
+        assert isinstance(ckpt_cb, ModelCheckpoint)
+        _save_best_weights_artifact(cfg, ckpt_cb)
     return trainer
+
+
+def _save_best_weights_artifact(cfg: DictConfig, ckpt_cb: ModelCheckpoint) -> None:
+    """Record `best_epoch` in the W&B summary and upload the weights-only best-checkpoint artifact.
+
+    Gated on an active W&B run, so nothing is read or staged under `logger=none`. The one
+    additional checkpoint read (for `best_epoch` + the state_dict) is *not* wrapped: Lightning just
+    validated this file, so a failure to read it is unexpected and should surface. `best_epoch` is
+    written to the summary before the artifact work, so a staging/upload failure — which only warns,
+    never breaks training or `cross-validate`'s fold loop — cannot suppress it.
+    """
+    if not wandb_run_active():
+        return
+    # `best_model_path`/`best_model_score` are set internally by Lightning without type annotations.
+    best_path = cast(str, ckpt_cb.best_model_path)  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]
+    state_dict, best_epoch = load_best_checkpoint(best_path)
+    update_summary({"best_epoch": best_epoch})
+    score = ckpt_cb.best_model_score  # pyright: ignore[reportUnknownMemberType]
+    try:
+        log_best_weights_artifact(
+            cfg,
+            state_dict,
+            best_epoch,
+            dest_dir=cast(str, ckpt_cb.dirpath),
+            monitor=ckpt_cb.monitor,
+            score=float(score) if score is not None else None,
+        )
+    except Exception:
+        log.warning("Failed to upload best-weights artifact; continuing.", exc_info=True)
 
 
 @hydra.main(version_base=None, config_path=CONFIG_DIR, config_name="train")

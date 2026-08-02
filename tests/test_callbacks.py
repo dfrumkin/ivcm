@@ -9,8 +9,12 @@ import pytest
 from hydra import compose, initialize_config_dir
 from hydra.utils import instantiate
 from lightning.pytorch.callbacks import ModelCheckpoint
+from omegaconf import OmegaConf
 
-from ivcm.train import run
+from ivcm.train import (
+    _save_best_weights_artifact,  # pyright: ignore[reportPrivateUsage]
+    run,
+)
 from ivcm.utils import finish_wandb
 
 CONFIGS_DIR = str(Path(__file__).resolve().parents[1] / "configs")
@@ -62,8 +66,15 @@ def test_callbacks_default_saves_and_validates_best(tmp_path: Path, monkeypatch:
     locked deterministically — a short run's best epoch is often the last, which would make a
     value comparison pass even if the summary were never updated."""
     monkeypatch.setenv("WANDB_MODE", "offline")
-    summary_calls: list[dict[str, float]] = []
+    summary_calls: list[dict[str, float | int]] = []
     monkeypatch.setattr("ivcm.train.update_summary", summary_calls.append)
+    # Spy the artifact upload so the wiring is asserted without staging/logging a real artifact.
+    artifact_calls: list[object] = []
+
+    def _spy_artifact(*args: object, **kwargs: object) -> None:
+        artifact_calls.append((args, kwargs))
+
+    monkeypatch.setattr("ivcm.train.log_best_weights_artifact", _spy_artifact)
     with initialize_config_dir(config_dir=CONFIGS_DIR, version_base=None):
         cfg = compose(
             config_name="train",
@@ -94,12 +105,15 @@ def test_callbacks_default_saves_and_validates_best(tmp_path: Path, monkeypatch:
         assert Path(best_model_path).exists()
         # The headline metric came from validating that checkpoint.
         assert "val/auc_macro" in trainer.callback_metrics
-        # run() pushed the best-checkpoint val/* snapshot into the W&B summary: called once,
-        # only with val/* keys, including the monitored metric.
-        assert len(summary_calls) == 1
-        snapshot = summary_calls[0]
-        assert snapshot and all(k.startswith("val/") for k in snapshot)
-        assert "val/auc_macro" in snapshot
+        # run() pushed two summary writes: the best-checkpoint val/* snapshot (val/* keys only,
+        # including the monitored metric) and the best_epoch marker.
+        assert len(summary_calls) == 2
+        val_snapshot = next(s for s in summary_calls if all(k.startswith("val/") for k in s))
+        assert "val/auc_macro" in val_snapshot
+        epoch_write = next(s for s in summary_calls if "best_epoch" in s)
+        assert set(epoch_write) == {"best_epoch"} and isinstance(epoch_write["best_epoch"], int)
+        # The weights-only artifact upload was invoked exactly once (under the active W&B run).
+        assert len(artifact_calls) == 1
     finally:
         finish_wandb()
 
@@ -133,6 +147,80 @@ def test_callbacks_none_does_not_update_summary(tmp_path: Path, monkeypatch: pyt
     assert summary_calls == []
     # run() pinned default_root_dir to the run dir, so the auto checkpoint lands under tmp_path.
     assert Path(trainer.default_root_dir) == tmp_path
+
+
+def test_save_best_weights_artifact_gated_on_active_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Without an active W&B run, the best-weights step is a full no-op: no checkpoint read, no
+    `best_epoch` write, no artifact staging/upload (the step-2 gate)."""
+    finish_wandb()  # ensure no run is active
+    load_calls: list[object] = []
+    log_calls: list[object] = []
+    summary_calls: list[object] = []
+
+    def _spy_load(*a: object, **k: object) -> tuple[dict[str, object], int]:
+        load_calls.append((a, k))
+        return {}, 0
+
+    def _spy_log(*a: object, **k: object) -> None:
+        log_calls.append((a, k))
+
+    def _spy_summary(*a: object, **k: object) -> None:
+        summary_calls.append((a, k))
+
+    monkeypatch.setattr("ivcm.train.load_best_checkpoint", _spy_load)
+    monkeypatch.setattr("ivcm.train.log_best_weights_artifact", _spy_log)
+    monkeypatch.setattr("ivcm.train.update_summary", _spy_summary)
+
+    cfg = OmegaConf.create({})
+    ckpt_cb = ModelCheckpoint(monitor="val/auc_macro")
+    _save_best_weights_artifact(cfg, ckpt_cb)
+
+    assert load_calls == [] and log_calls == [] and summary_calls == []
+
+
+def test_artifact_upload_failure_does_not_break_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """An artifact staging/upload failure only warns — `run()` still completes (so a
+    `cross-validate` fold is not lost) and `best_epoch` was already written to the summary."""
+    monkeypatch.setenv("WANDB_MODE", "offline")
+    summary_calls: list[dict[str, float | int]] = []
+    monkeypatch.setattr("ivcm.train.update_summary", summary_calls.append)
+    # Spy the module logger directly: run() reconfigures logging, so caplog (root handler) would
+    # not see the warning.
+    warnings_logged: list[str] = []
+
+    def _spy_warning(msg: object, *a: object, **k: object) -> None:
+        warnings_logged.append(str(msg))
+
+    monkeypatch.setattr("ivcm.train.log.warning", _spy_warning)
+
+    def _boom(*args: object, **kwargs: object) -> None:
+        raise RuntimeError("upload failed")
+
+    monkeypatch.setattr("ivcm.train.log_best_weights_artifact", _boom)
+    with initialize_config_dir(config_dir=CONFIGS_DIR, version_base=None):
+        cfg = compose(
+            config_name="train",
+            overrides=[
+                "task=classification",
+                "callbacks=default",
+                f"logger.save_dir={tmp_path}",
+                "image_size=32",
+                "data.train_dataset.num_samples=4",
+                "data.val_dataset.num_samples=4",
+                "data.batch_size=2",
+                "trainer.max_epochs=2",
+                "trainer.accelerator=cpu",
+                "trainer.enable_progress_bar=false",
+            ],
+        )
+
+    try:
+        trainer = run(cfg, run_dir=str(tmp_path))
+        assert trainer is not None  # run() did not propagate the artifact failure
+        assert any("best_epoch" in s for s in summary_calls)  # best_epoch written before the failure
+        assert any("artifact" in w.lower() for w in warnings_logged)
+    finally:
+        finish_wandb()
 
 
 def test_ckpt_path_is_threaded_to_fit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

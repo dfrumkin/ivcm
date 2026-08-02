@@ -125,6 +125,32 @@ Each `run_dir` must contain `.hydra/config.yaml` (the saved Hydra config, used t
 model), and each `ckpt` must point at a real checkpoint under that run. If a path is missing — or
 the configured models are miswired — the app shows a clear error dialog at startup and exits.
 
+#### Using a trained model in the UI
+
+When you train on a remote machine (e.g. a CUDA box) but run the UI elsewhere (e.g. a Mac), the
+easiest path is the **weights-only W&B artifact** each run uploads (see
+[Weights-only best-checkpoint artifact](#outputs-logging-and-tracking)). It is self-contained, so
+**nothing else needs to be copied** from the training machine:
+
+1. Pick the runs from W&B — the classification run, and (from a CV) the fold with the best
+   `val/auprc` (the run **summary** is only for this choice; the UI does not read it).
+2. Download each run's `weights-<run id>` artifact. A downloaded artifact directory holds
+   `best-weights.ckpt` and `.hydra/config.yaml`.
+3. Point `config.py` at those two directories, using **absolute (or full repo-relative) paths for
+   both `run_dir` and `ckpt`** — `ModelConfig` resolves a relative path against the repo root, not
+   against `run_dir`, so a bare `ckpt="best-weights.ckpt"` would look under the repo root:
+
+   ```python
+   segmentation=ModelConfig(
+       run_dir="/abs/path/to/weights-<seg-run-id>",              # holds .hydra/config.yaml
+       ckpt="/abs/path/to/weights-<seg-run-id>/best-weights.ckpt",
+   ),
+   ```
+
+The weights are stored on CPU, so a model trained on CUDA loads directly on the Mac's MPS/CPU. The
+UI machine still needs a compatible `ivcm` checkout: the artifact carries the weights and Hydra
+config, but the model *class definitions* come from the installed package.
+
 ### App icon
 
 The app sets a window/taskbar icon (the dendritic-cell artwork) on every platform via
@@ -254,7 +280,20 @@ classification and a random `${crop_size}` crop for segmentation.
   from that best checkpoint** (`trainer.validate(ckpt_path="best")`); the full per-epoch curve
   stays visible in W&B, and the W&B run **summary** `val/*` is overwritten with that
   best-checkpoint snapshot (a run summary otherwise holds each metric's *last-epoch* value).
-  Without it (the default), the final-epoch model is validated as before.
+  The summary also gets a **`best_epoch`** field naming the epoch that snapshot came from — the
+  summary's `epoch`/`global_step` stay at the last training step (training length), so
+  `best_epoch` is what tells you which epoch the `val/*` values belong to. Without a monitored
+  best checkpoint (the default), the final-epoch model is validated as before.
+
+- **Weights-only best-checkpoint artifact (W&B).** When a best checkpoint is saved *and* a W&B
+  run is active, the run also uploads a `model` artifact named `weights-<run id>` (one per run;
+  each CV fold is its own run, so its own artifact). It contains just two files: a **weights-only**
+  `best-weights.ckpt` (the model `state_dict` only — no optimizer state, ~⅓ the full checkpoint's
+  size — with all tensors on **CPU**) and the run's `.hydra/config.yaml`. This makes the artifact
+  **self-contained and cross-platform**: trained on a CUDA machine, it loads directly on a Mac
+  (MPS/CPU). The upload is best-effort — a failure only warns and never fails the run — and the
+  local `best-weights.ckpt` is also left in the checkpoint dir. See
+  [Using a trained model in the UI](#using-a-trained-model-in-the-ui) for how the app consumes it.
 
 ### Baseline runs
 
