@@ -12,6 +12,7 @@ train_dataset:
   transform:
     _target_: ivcm.data.transforms.build_crop_transform
     size: ${crop_size}
+    photometric: ${augmentation.photometric}
 val_dataset:
   _target_: ivcm.data.SyntheticSegmentationDataset
   num_samples: 32

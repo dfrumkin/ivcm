@@ -251,9 +251,19 @@ uv run train task=classification model.net.model_name=resnet34 optimizer.lr=1e-4
 What is configurable (all via `_target_`): architecture (`timm` for classification,
 `segmentation-models-pytorch` for segmentation), loss, optimizer, scheduler, and the
 datasets/data module. The class set is driven by a single `class_names` list per task (the
-count is derived as `${len:${class_names}}`). Augmentation is currently **D4** (90°
-rotations + flips) via Albumentations, combined with a resize to `${image_size}` for
-classification and a random `${crop_size}` crop for segmentation.
+count is derived as `${len:${class_names}}`). Training augmentation is **D4** (90°
+rotations + flips) via Albumentations — combined with a resize to `${image_size}` for
+classification and a random `${crop_size}` crop for segmentation — plus **image-only photometric
+jitter** (brightness / contrast / gamma), which is **on by default** for both tasks. Photometric
+jitter is configured under `augmentation.photometric` (see [configs/common.yaml](configs/common.yaml));
+turn it off entirely with `augmentation.photometric.enabled=false` or tune it, e.g.:
+
+```bash
+uv run train task=classification augmentation.photometric.enabled=false   # disable photometric aug
+uv run train task=segmentation augmentation.photometric.brightness_limit=0.3 augmentation.photometric.p=0.7
+```
+
+Evaluation/inference transforms stay deterministic (no augmentation).
 
 ### Outputs, logging, and tracking
 
@@ -411,7 +421,7 @@ integer targets, incompatible with the new soft `(logits, p)` criterion contract
 
 ```
 src/ivcm/
-  data/        # real (.tif/.nii) + synthetic datasets, datamodules, D4 + resize/crop transforms
+  data/        # real (.tif/.nii) + synthetic datasets, datamodules, D4 + photometric + resize/crop transforms
   models/      # classification + segmentation LightningModules (incl. metrics)
   utils/       # logging setup, device selection (shared by predict + UI)
   app/         # PySide6 clinical-review UI (`ivcm-ui` console script; optional `ui` extra)

@@ -16,6 +16,19 @@ image_size: 384
 # It becomes a direct U-Net input, so it must be divisible by the encoder's downsampling
 # stride (32 for the resnet encoders); the default 192 = 6*32 satisfies this.
 crop_size: 192
+# Train-time photometric (intensity) augmentation, image-only, applied by the two training transform
+# builders. On by default for uncalibrated IVCM grayscale; eval/inference transforms never use it.
+# Disable entirely with `augmentation.photometric.enabled=false`; tune the ranges/probability as
+# needed. `p` is the apply probability of EACH op independently (so the chance at least one fires is
+# higher than p). gamma_limit is in percent: [80, 120] == gamma in [0.8, 1.2].
+augmentation:
+  photometric:
+    enabled: true
+    brightness_limit: 0.2
+    contrast_limit: 0.2
+    gamma_limit: [80, 120]
+    p: 0.5
+
 # Checkpoint to resume training from (Lightning restores epoch/optimizer/scheduler state).
 # null -> fresh run. Override with a path, e.g. ckpt_path=outputs/.../checkpoints/last.ckpt.
 ckpt_path: null

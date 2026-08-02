@@ -144,7 +144,9 @@ class NiiSegmentationDataset(Dataset[tuple[Any, Any]]):
 
     def __getitem__(self, index: int) -> tuple[Any, Any]:
         idx = self.slice_indices[index]
-        image = self.images[:, :, idx].astype(np.float32) / 255.0
+        # /255 bakes in the pipeline's 8-bit source assumption; clip guarantees the [0, 1] range the
+        # (image-only) photometric train augmentation relies on. A no-op for valid 8-bit volumes.
+        image = np.clip(self.images[:, :, idx].astype(np.float32) / 255.0, 0.0, 1.0)
         ensure_square(image.shape, source=f"slice {idx}")
         image = image[..., None]  # HWC, single channel
         mask = (self.masks[:, :, idx] > 0).astype(np.float32)  # float32 foreground prob {0.0, 1.0}

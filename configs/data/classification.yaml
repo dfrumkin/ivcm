@@ -17,6 +17,7 @@ train_dataset:
   transform:
     _target_: ivcm.data.transforms.build_d4_transform
     size: ${image_size}
+    photometric: ${augmentation.photometric}
 val_dataset:
   _target_: ivcm.data.SyntheticClassificationDataset
   num_samples: 32

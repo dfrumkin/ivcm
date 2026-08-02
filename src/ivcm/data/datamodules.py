@@ -12,7 +12,7 @@ it builds its datasets internally.
 from __future__ import annotations
 
 import logging
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any, Protocol, cast, runtime_checkable
 
@@ -121,6 +121,7 @@ class SegmentationCVDataModule(L.LightningDataModule):
         batch_size: int = 4,
         num_workers: int = 0,
         crop_size: int = 192,
+        photometric: Mapping[str, Any] | None = None,
     ) -> None:
         super().__init__()
         if not 0 <= fold < n_folds:
@@ -132,6 +133,9 @@ class SegmentationCVDataModule(L.LightningDataModule):
         self.batch_size = batch_size
         self.num_workers = num_workers
         self.crop_size = crop_size
+        # Config-driven photometric train augmentation (see transforms._photometric_transforms);
+        # None -> on-by-default. Only the train crop transform gets it; validation stays deterministic.
+        self.photometric = photometric
         self.train_dataset: NiiSegmentationDataset | None = None
         self.val_dataset: NiiSegmentationDataset | None = None
         # Exposed for tests / inspection.
@@ -153,7 +157,7 @@ class SegmentationCVDataModule(L.LightningDataModule):
         # Train on native-resolution crops; validate on full native-resolution slices (fed to
         # sliding-window inference). All slices in one volume share H×W, so val still batches.
         self.train_dataset = NiiSegmentationDataset(
-            images, masks, self.train_indices, transform=build_crop_transform(self.crop_size)
+            images, masks, self.train_indices, transform=build_crop_transform(self.crop_size, self.photometric)
         )
         self.val_dataset = NiiSegmentationDataset(images, masks, self.val_indices, transform=build_seg_eval_transform())
 
@@ -199,6 +203,7 @@ class Segmentation2CVDataModule(L.LightningDataModule):
         batch_size: int = 4,
         num_workers: int = 0,
         crop_size: int = 192,
+        photometric: Mapping[str, Any] | None = None,
     ) -> None:
         super().__init__()
         if (images_path is None) != (masks_path is None):
@@ -218,6 +223,9 @@ class Segmentation2CVDataModule(L.LightningDataModule):
         self.batch_size = batch_size
         self.num_workers = num_workers
         self.crop_size = crop_size
+        # Config-driven photometric train augmentation (see transforms._photometric_transforms);
+        # None -> on-by-default. Applied to every train crop transform (ds2 and combined-mode ds1).
+        self.photometric = photometric
         self.train_dataset: Dataset[Sample] | None = None
         self.val_dataset: Segmentation2Dataset | None = None
         # Exposed for tests / inspection.
@@ -252,7 +260,9 @@ class Segmentation2CVDataModule(L.LightningDataModule):
             len(ds2_val_dirs),
         )
 
-        ds2_train = Segmentation2Dataset(ds2_train_dirs, transform=build_crop_transform(self.crop_size))
+        ds2_train = Segmentation2Dataset(
+            ds2_train_dirs, transform=build_crop_transform(self.crop_size, self.photometric)
+        )
         self.val_dataset = Segmentation2Dataset(ds2_val_dirs, transform=build_seg_eval_transform())
 
         if self.images_path is not None and self.masks_path is not None:
@@ -260,7 +270,7 @@ class Segmentation2CVDataModule(L.LightningDataModule):
             masks = _load_volume(self.masks_path)
             n_slices = images.shape[2]
             ds1 = NiiSegmentationDataset(
-                images, masks, list(range(n_slices)), transform=build_crop_transform(self.crop_size)
+                images, masks, list(range(n_slices)), transform=build_crop_transform(self.crop_size, self.photometric)
             )
             log.info("combined mode: %d ds1 volume slices added to training (all folds)", n_slices)
             self.train_dataset = ConcatDataset([cast("Dataset[Sample]", ds2_train), cast("Dataset[Sample]", ds1)])

@@ -8,3 +8,4 @@ fold: 0
 batch_size: 4
 num_workers: 0
 crop_size: ${crop_size}
+photometric: ${augmentation.photometric}
