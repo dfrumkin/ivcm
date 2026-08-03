@@ -1,13 +1,18 @@
 """Dendritic-cell (DC) morphometry from a binary segmentation mask.
 
-Three measures, reported in **physical units** derived from ``physical_image_size`` -- the
-physical side length of the (square) input image, in the operator's unit of choice. With
-``S = physical_image_size`` and the pixel resolution ``R = mask.shape[0]`` (masks are square, so
-``R == mask.shape[1]``) giving a per-pixel scale ``scale = S / R``:
+Three measures, reported in the conventional clinical units. ``physical_image_size`` is the
+physical side length of the (square) input image **in micrometres** (default ``400`` -- the 400 µm
+field of the Heidelberg HRT / Rostock Cornea Module used to acquire these IVCM images). With
+``S = physical_image_size`` (µm) and the pixel resolution ``R = mask.shape[0]`` (masks are square,
+so ``R == mask.shape[1]``) giving a per-pixel scale ``scale = S / R`` (µm/pixel):
 
-- **density** — number of DCs per image / ``S**2`` (components per physical image area);
-- **area** — total DC surface per image, ``raw_px2 * scale**2`` (physical area);
-- **perimeter** — total DC outline length per image, ``raw_px * scale`` (physical length).
+- **density** — DCs per image / ``(S / 1000)**2`` = **DCs per mm²** (the count times a constant, as
+  the source protocol defines it; ``S / 1000`` is the side length in mm);
+- **area** — total DC surface per image, ``raw_px2 * scale**2`` (**µm²**);
+- **perimeter** — total DC outline length per image, ``raw_px * scale`` (**µm**).
+
+Density is reported per mm² but area/perimeter per µm² / µm -- the two length units differ because
+that is the clinical convention, so density alone carries the µm→mm conversion.
 
 The raw pixel measurements (``raw_px2``/``raw_px``) are unchanged: the 0/1 pixel grid is a biased
 substrate for area and (especially) perimeter -- the staircased boundary overestimates perimeter
@@ -44,6 +49,10 @@ from skimage.measure import find_contours, label  # pyright: ignore[reportUnknow
 # 8-connectivity (``connectivity=2`` in scikit-image 2D terms), used for labelling so a cell
 # and a diagonally-touching speck are one component -- the size filter and the count agree.
 _CONNECTIVITY = 2
+
+# ``physical_image_size`` is in µm (so area/perimeter come out in µm² / µm); density is
+# conventionally per mm², so its denominator converts the side length from µm to mm.
+_UM_PER_MM = 1000.0
 
 
 def _validate(mask: np.ndarray, *, sigma: float | None, physical_image_size: float, min_size: int) -> None:
@@ -141,23 +150,24 @@ def _area_perimeter(labels: np.ndarray, sigma: float) -> tuple[float, float]:
     return area, perimeter
 
 
-def cell_density(mask: np.ndarray, *, physical_image_size: float = 2.5, min_size: int = 3) -> float:
-    """DC count (8-connected components, after ``min_size`` filtering) per physical image area.
+def cell_density(mask: np.ndarray, *, physical_image_size: float = 400.0, min_size: int = 3) -> float:
+    """DC count (8-connected components, after ``min_size`` filtering) per mm².
 
-    ``count / physical_image_size**2`` -- components per unit of physical area, using the square
-    image's physical side length. Independent of the pixel resolution.
+    ``count / (physical_image_size / 1000)**2`` -- components per mm², using the square image's
+    physical side length (``physical_image_size`` in µm; ``/1000`` converts it to mm). Independent
+    of the pixel resolution.
     """
     _validate(mask, sigma=None, physical_image_size=physical_image_size, min_size=min_size)
     _, count = _label_components(mask, min_size)
-    return count / physical_image_size**2
+    return count / (physical_image_size / _UM_PER_MM) ** 2
 
 
-def cell_area(mask: np.ndarray, *, sigma: float = 1.0, physical_image_size: float = 2.5, min_size: int = 3) -> float:
-    """Total DC surface area in physical units from the smoothed per-component contours.
+def cell_area(mask: np.ndarray, *, sigma: float = 1.0, physical_image_size: float = 400.0, min_size: int = 3) -> float:
+    """Total DC surface area in µm² from the smoothed per-component contours.
 
     The raw pixel area is scaled by ``(physical_image_size / R)**2`` (``R`` the square mask's side
-    length). ``sigma`` controls the smoothing/bias trade-off (see the module docstring); ``sigma=0``
-    measures the raw 0.5 contour with no smoothing.
+    length; ``physical_image_size`` in µm). ``sigma`` controls the smoothing/bias trade-off (see the
+    module docstring); ``sigma=0`` measures the raw 0.5 contour with no smoothing.
     """
     _validate(mask, sigma=sigma, physical_image_size=physical_image_size, min_size=min_size)
     labels, _ = _label_components(mask, min_size)
@@ -167,13 +177,13 @@ def cell_area(mask: np.ndarray, *, sigma: float = 1.0, physical_image_size: floa
 
 
 def cell_perimeter(
-    mask: np.ndarray, *, sigma: float = 1.0, physical_image_size: float = 2.5, min_size: int = 3
+    mask: np.ndarray, *, sigma: float = 1.0, physical_image_size: float = 400.0, min_size: int = 3
 ) -> float:
-    """Total DC outline length in physical units from the smoothed per-component contours.
+    """Total DC outline length in µm from the smoothed per-component contours.
 
     The raw pixel perimeter is scaled by ``physical_image_size / R`` (``R`` the square mask's side
-    length). ``sigma`` controls the smoothing/bias trade-off (see the module docstring); ``sigma=0``
-    measures the raw 0.5 contour with no smoothing.
+    length; ``physical_image_size`` in µm). ``sigma`` controls the smoothing/bias trade-off (see the
+    module docstring); ``sigma=0`` measures the raw 0.5 contour with no smoothing.
     """
     _validate(mask, sigma=sigma, physical_image_size=physical_image_size, min_size=min_size)
     labels, _ = _label_components(mask, min_size)
@@ -183,17 +193,21 @@ def cell_perimeter(
 
 
 def cell_morphometry(
-    mask: np.ndarray, *, sigma: float = 1.0, physical_image_size: float = 2.5, min_size: int = 3
+    mask: np.ndarray, *, sigma: float = 1.0, physical_image_size: float = 400.0, min_size: int = 3
 ) -> dict[str, float]:
-    """All three measures at once: ``{"density", "area", "perimeter"}`` in physical units.
+    """All three measures at once: ``{"density", "area", "perimeter"}`` (cells/mm², µm², µm).
 
     The intended single entry point at inference: cleans/labels the mask once and extracts the
     smoothed contours once for area and perimeter, avoiding redundant work. Density is
-    ``count / physical_image_size**2``; area/perimeter scale the raw pixel measurements by
-    ``scale**2`` / ``scale`` where ``scale = physical_image_size / R``.
+    ``count / (physical_image_size / 1000)**2``; area/perimeter scale the raw pixel measurements by
+    ``scale**2`` / ``scale`` where ``scale = physical_image_size / R`` (see the module docstring).
     """
     _validate(mask, sigma=sigma, physical_image_size=physical_image_size, min_size=min_size)
     labels, count = _label_components(mask, min_size)
     area, perimeter = _area_perimeter(labels, sigma)
     scale = physical_image_size / mask.shape[0]
-    return {"density": count / physical_image_size**2, "area": area * scale**2, "perimeter": perimeter * scale}
+    return {
+        "density": count / (physical_image_size / _UM_PER_MM) ** 2,
+        "area": area * scale**2,
+        "perimeter": perimeter * scale,
+    }

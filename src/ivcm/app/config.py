@@ -62,12 +62,13 @@ class AppConfig:
     segmentation: ModelConfig
 
     # Morphometry parameters forwarded to ``ivcm.morphometry.cell_morphometry``.
-    # ``physical_image_size`` is the physical side length of the (square) input image, in the
-    # operator's unit of choice: density is ``count / physical_image_size**2`` and area/perimeter
-    # scale the raw pixel measurements by ``(physical_image_size / resolution)`` (squared for area).
-    # It is unrelated to the pixel-space ``image_size`` in the training/model config.
+    # ``physical_image_size`` is the physical side length of the (square) input image in µm
+    # (default 400 -- the HRT / Rostock Cornea Module field): density is reported as cells/mm²
+    # (``count / (physical_image_size / 1000)**2``), area in µm² and perimeter in µm (scaling the
+    # raw pixel measurements by ``physical_image_size / resolution``, squared for area). It is
+    # unrelated to the pixel-space ``image_size`` in the training/model config.
     sigma: float = 1.0
-    physical_image_size: float = 2.5
+    physical_image_size: float = 400.0
     min_size: int = 3
 
     # Overlay appearance: RGB mask colour and blend alpha in [0, 1].

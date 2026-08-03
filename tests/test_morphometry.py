@@ -74,8 +74,8 @@ def test_square_area_and_perimeter() -> None:
 
 
 def test_density_is_count_over_physical_area_and_min_size_filters() -> None:
-    """Density is ``count / physical_image_size**2``; the new default ``min_size=3`` filters a
-    1-pixel speck that ``min_size=0`` keeps."""
+    """Density is ``count / (physical_image_size / 1000)**2`` (cells/mm², µm side length); the new
+    default ``min_size=3`` filters a 1-pixel speck that ``min_size=0`` keeps."""
     mask = np.zeros((100, 100), dtype=np.uint8)
     mask[_disk(100, 8, 25, 25) > 0] = 1
     mask[_disk(100, 8, 25, 75) > 0] = 1
@@ -83,8 +83,8 @@ def test_density_is_count_over_physical_area_and_min_size_filters() -> None:
     mask[90, 90] = 1  # a 1-pixel speck (size 1)
 
     # Without filtering the speck counts (4 components); the default min_size=3 drops it (3).
-    assert cell_density(mask, min_size=0, physical_image_size=2.0) == 4 / 2.0**2
-    assert cell_density(mask, physical_image_size=2.0) == 3 / 2.0**2  # default min_size=3
+    assert cell_density(mask, min_size=0, physical_image_size=2000.0) == 4 / (2000.0 / 1000) ** 2
+    assert cell_density(mask, physical_image_size=2000.0) == 3 / (2000.0 / 1000) ** 2  # default min_size=3
 
 
 def test_physical_scaling_matches_scale_one_baseline() -> None:
@@ -93,13 +93,13 @@ def test_physical_scaling_matches_scale_one_baseline() -> None:
     mask = _disk(120, 40.0, 60, 60)
     resolution = mask.shape[0]  # R
 
-    # scale == 1: area/perimeter are the raw pixel measurements, density is count / R**2.
+    # scale == 1: area/perimeter are the raw pixel measurements; density is count / (R/1000)**2.
     baseline = cell_morphometry(mask, sigma=1.0, physical_image_size=resolution)
     size = 2.5
     scaled = cell_morphometry(mask, sigma=1.0, physical_image_size=size)
     scale = size / resolution
 
-    # density * S**2 == count on both sides, so the two densities encode the same component count.
+    # density * S**2 == count * 1000**2 on both sides, so the two densities encode the same count.
     assert _close(scaled["density"] * size**2, baseline["density"] * resolution**2, 1e-9)
     assert _close(scaled["area"], baseline["area"] * scale**2, 1e-9)
     assert _close(scaled["perimeter"], baseline["perimeter"] * scale, 1e-9)
@@ -115,10 +115,10 @@ def test_min_size_applied_consistently_across_metrics() -> None:
     big_only = cell_morphometry(big, sigma=1.0)
     with_speck = cell_morphometry(mask, sigma=1.0, min_size=5)
 
-    # The surviving big component is processed identically with or without the (removed) speck,
-    # so the measures are exactly equal, not merely close. Density is count / physical_image_size**2
-    # with the default physical_image_size=2.5.
-    assert with_speck["density"] == big_only["density"] == 1 / 2.5**2
+    # The surviving big component is processed identically with or without the (removed) speck, so
+    # the measures are exactly equal, not merely close. Density is count / (physical_image_size/1000)**2
+    # with the default physical_image_size=400 (µm) -> 1 / 0.4**2 cells/mm².
+    assert with_speck["density"] == big_only["density"] == 1 / (400.0 / 1000) ** 2
     assert with_speck["area"] == big_only["area"]
     assert with_speck["perimeter"] == big_only["perimeter"]
 
@@ -132,8 +132,8 @@ def test_close_components_not_bridged() -> None:
     # Two disks 40px apart (centres at cols 60 and 100): a wide background gap separates them.
     pair = _disk(160, radius, 80, 60)
     pair[_disk(160, radius, 80, 100) > 0] = 1
-    # Sanity: genuinely two 8-connected components, not a diagonal touch (density = 2 / 2.5**2).
-    assert cell_density(pair) == 2 / 2.5**2
+    # Sanity: genuinely two 8-connected components, not a diagonal touch (density = 2 / 0.4**2).
+    assert cell_density(pair) == 2 / (400.0 / 1000) ** 2
 
     both = cell_morphometry(pair, sigma=1.0)
     assert _close(both["area"], 2 * single["area"], 0.02)
@@ -149,7 +149,7 @@ def test_hole_is_filled() -> None:
 
     # Filling the hole reconstructs the solid disk exactly, so the measures are identical.
     solid = _disk(120, radius, 60, 60)
-    assert cell_density(annulus) == 1 / 2.5**2
+    assert cell_density(annulus) == 1 / (400.0 / 1000) ** 2
     assert cell_area(annulus, sigma=1.0) == cell_area(solid, sigma=1.0)
     assert cell_perimeter(annulus, sigma=1.0) == cell_perimeter(solid, sigma=1.0)
 
@@ -164,7 +164,7 @@ def test_empty_mask_is_zero() -> None:
 def test_edge_touching_object_is_measured() -> None:
     """A cell overlapping the image border is still measured (padding closes its contour)."""
     mask = _disk(80, 20, 0, 40)  # centre on the top edge: the disk is clipped by the border
-    assert cell_density(mask) == 1 / 2.5**2
+    assert cell_density(mask) == 1 / (400.0 / 1000) ** 2
     area = cell_area(mask, sigma=1.0)
     perimeter = cell_perimeter(mask, sigma=1.0)
     assert area > 0 and math.isfinite(area)
