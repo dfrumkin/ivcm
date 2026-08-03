@@ -150,6 +150,18 @@ def _load_cfg(mc: ModelConfig) -> DictConfig:
     return cast(DictConfig, OmegaConf.load(config_path))
 
 
+def strip_criterion_state(state: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
+    """Drop ``criterion.*`` entries from a checkpoint ``state_dict`` for inference loading.
+
+    The criterion is a submodule of the training LightningModule, so training-time buffers — e.g.
+    the weighted cross-entropy's ``criterion.weight``, injected from the data's class frequencies —
+    are saved in the checkpoint. Inference never runs the loss and rebuilds it from config without
+    those runtime weights, so those keys would be "unexpected" under a strict load. Removing them
+    lets the remaining ``net.*`` weights load strictly.
+    """
+    return {k: v for k, v in state.items() if not k.startswith("criterion.")}
+
+
 def _load_model(cfg: DictConfig, ckpt_path: Path, device: torch.device) -> nn.Module:
     """Instantiate the run's model and load its checkpoint weights for inference.
 
@@ -166,8 +178,8 @@ def _load_model(cfg: DictConfig, ckpt_path: Path, device: torch.device) -> nn.Mo
             scheduler=None,
         ),
     )
-    state = cast("dict[str, torch.Tensor]", torch.load(ckpt_path, map_location=device)["state_dict"])
-    model.load_state_dict(state)
+    full_state = cast("dict[str, torch.Tensor]", torch.load(ckpt_path, map_location=device)["state_dict"])
+    model.load_state_dict(strip_criterion_state(full_state))
     model.eval()
     model.to(device)
     return model

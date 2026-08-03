@@ -19,7 +19,7 @@ from ivcm.app.editing import (
     stamp_disk,
     stamp_stroke,
 )
-from ivcm.app.inference import mask_from_seg_logits, predicted_class
+from ivcm.app.inference import mask_from_seg_logits, predicted_class, strip_criterion_state
 from ivcm.app.records import (
     MAX_PINNED,
     ImageRecord,
@@ -288,6 +288,27 @@ def test_mask_from_seg_logits_argmax_at_native_resolution() -> None:
     assert set(np.unique(mask).tolist()) <= {0, 1}
     assert mask[0, 0] == 1  # foreground where class 1 wins
     assert mask[1, 1] == 0  # background elsewhere
+
+
+def test_strip_criterion_state_drops_only_criterion_keys() -> None:
+    # A checkpoint from weighted-CE training carries `criterion.weight` (and could carry other
+    # criterion buffers). Inference rebuilds the loss without those, so they must be dropped while
+    # every `net.*` weight is preserved unchanged.
+    net_weight = torch.ones(3)
+    state = {
+        "net.encoder.conv.weight": net_weight,
+        "criterion.weight": torch.tensor([0.5, 2.0]),
+    }
+
+    stripped = strip_criterion_state(state)
+
+    assert set(stripped) == {"net.encoder.conv.weight"}
+    assert stripped["net.encoder.conv.weight"] is net_weight
+
+
+def test_strip_criterion_state_is_noop_without_criterion_keys() -> None:
+    state = {"net.a": torch.zeros(1), "net.b": torch.ones(1)}
+    assert strip_criterion_state(state) == state
 
 
 def test_map_to_mask_center_margins_and_corners() -> None:

@@ -96,11 +96,11 @@ class AppConfig:
 # ``.hydra/config.yaml``; both ``ckpt`` values must point at a real checkpoint under the run.
 CONFIG = AppConfig(
     classification=ModelConfig(
-        run_dir="outputs/2026-06-10/12-09-43",
-        ckpt="outputs/2026-06-10/12-09-43/checkpoints/best-epoch38.ckpt",
+        run_dir="/Users/dmitry/ivcm-models/cls",
+        ckpt="/Users/dmitry/ivcm-models/cls/best-weights.ckpt",
     ),
     segmentation=ModelConfig(
-        run_dir="outputs/2026-06-10/15-42-08",
-        ckpt="outputs/2026-06-10/15-42-08/fold_1/checkpoints/best-epoch38.ckpt",
+        run_dir="/Users/dmitry/ivcm-models/seg",
+        ckpt="/Users/dmitry/ivcm-models/seg/best-weights.ckpt",
     ),
 )
