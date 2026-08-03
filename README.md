@@ -254,9 +254,12 @@ datasets/data module. The class set is driven by a single `class_names` list per
 count is derived as `${len:${class_names}}`). Training augmentation is **D4** (90°
 rotations + flips) via Albumentations — combined with a resize to `${image_size}` for
 classification and a random `${crop_size}` crop for segmentation — plus **image-only photometric
-jitter** (brightness / contrast / gamma), which is **on by default** for both tasks. Photometric
-jitter is configured under `augmentation.photometric` (see [configs/common.yaml](configs/common.yaml));
-turn it off entirely with `augmentation.photometric.enabled=false` or tune it, e.g.:
+jitter** (brightness / contrast / gamma), **on by default**. Photometric jitter is configured under
+`augmentation.photometric` (global default in [configs/common.yaml](configs/common.yaml)); the
+**segmentation** task overrides it to mild **brightness only** (contrast/gamma off) because those
+warps hurt nerve segmentation while helping classification (see
+[configs/task/segmentation.yaml](configs/task/segmentation.yaml)). Turn it off entirely with
+`augmentation.photometric.enabled=false` or tune it, e.g.:
 
 ```bash
 uv run train task=classification augmentation.photometric.enabled=false   # disable photometric aug

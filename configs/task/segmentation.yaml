@@ -19,3 +19,14 @@ class_names: [background, nerve]
 # operating threshold is fixed.
 checkpoint_monitor: val/auprc
 checkpoint_mode: max
+
+# Task-specific photometric tuning (overrides the global `augmentation.photometric` from common.yaml,
+# which composes before this task). Nerve segmentation keys on local nerve/stroma contrast, so the
+# contrast/gamma warps hurt it (removing them recovered the pre-augmentation baseline) while they
+# help classification. Keep only mild brightness jitter here; D4 geometric augmentation still applies,
+# and classification keeps the stronger global default. Re-enable with CLI overrides for ablations.
+augmentation:
+  photometric:
+    brightness_limit: 0.1
+    contrast_limit: 0.0
+    gamma_limit: [100, 100]  # gamma == 1.0 -> identity (no gamma warp)
