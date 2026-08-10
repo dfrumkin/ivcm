@@ -162,6 +162,26 @@ def strip_criterion_state(state: dict[str, torch.Tensor]) -> dict[str, torch.Ten
     return {k: v for k, v in state.items() if not k.startswith("criterion.")}
 
 
+def disable_net_downloads(model_cfg: DictConfig) -> None:
+    """Turn off ImageNet-pretrained initialisation before rebuilding the net for inference.
+
+    Both nets are configured to fetch pretrained weights over the network when constructed
+    (``timm.create_model``'s ``pretrained=True``; ``segmentation_models_pytorch``'s
+    ``encoder_weights="imagenet"``). Inference overwrites every parameter from the trained
+    checkpoint immediately afterwards, so that download is pure waste — and it breaks a standalone
+    deliverable: it needs the network, and in a frozen windowed build its progress bar writes to a
+    ``None`` stream (``AttributeError: 'NoneType' object has no attribute 'write'``). Disabling it
+    yields identical loaded weights while making startup offline-safe.
+    """
+    net = cast("DictConfig | None", OmegaConf.select(model_cfg, "net"))
+    if net is None:
+        return
+    if OmegaConf.select(net, "pretrained") is not None:
+        net.pretrained = False
+    if OmegaConf.select(net, "encoder_weights") is not None:
+        net.encoder_weights = None
+
+
 def _load_model(cfg: DictConfig, ckpt_path: Path, device: torch.device) -> nn.Module:
     """Instantiate the run's model and load its checkpoint weights for inference.
 
@@ -169,6 +189,7 @@ def _load_model(cfg: DictConfig, ckpt_path: Path, device: torch.device) -> nn.Mo
     ``model``/``loss``/``optimizer`` sub-nodes are read. ``scheduler=None`` avoids resolving the
     cosine scheduler's ``T_max: ${trainer.max_epochs}`` — inference never uses a scheduler.
     """
+    disable_net_downloads(cfg.model)
     model = cast(
         nn.Module,
         instantiate(

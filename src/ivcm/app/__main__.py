@@ -13,6 +13,7 @@ blocking dialog (which would hang headless CI).
 
 from __future__ import annotations
 
+import os
 import sys
 import tempfile
 import traceback
@@ -33,6 +34,21 @@ _SELF_CHECK_LOG = Path(tempfile.gettempdir()) / "ivcm-selfcheck.log"
 # Segmentation encoder downsampling stride: the synthetic self-check image side must be a multiple
 # of this so native-resolution sliding-window inference runs on a valid shape.
 _ENCODER_STRIDE = 32
+
+
+def _ensure_std_streams() -> None:
+    """Give libraries a real sink when ``sys.stdout``/``sys.stderr`` are ``None``.
+
+    A PyInstaller windowed (``--noconsole``) build has no console, so both streams are ``None``;
+    any library that writes to them (a download progress bar, a warning) then raises
+    ``AttributeError: 'NoneType' object has no attribute 'write'``. Point the missing streams at the
+    null device so a stray write never crashes the app. Streams that already exist (e.g. redirected
+    to a file by the CI smoke launcher) are left untouched.
+    """
+    if sys.stdout is None:
+        sys.stdout = open(os.devnull, "w", encoding="utf-8")  # noqa: SIM115 (open for process lifetime)
+    if sys.stderr is None:
+        sys.stderr = open(os.devnull, "w", encoding="utf-8")  # noqa: SIM115 (open for process lifetime)
 
 
 def _app_icon() -> QIcon:
@@ -91,6 +107,7 @@ def _run_self_check() -> int:
 
 
 def main() -> int:
+    _ensure_std_streams()  # windowed builds have None stdout/stderr; make writes safe first
     if _SELF_CHECK_FLAG in sys.argv:
         # Strip the flag before Qt sees sys.argv (Qt consumes argv and a stray flag is brittle).
         sys.argv = [arg for arg in sys.argv if arg != _SELF_CHECK_FLAG]

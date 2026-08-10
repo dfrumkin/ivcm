@@ -9,6 +9,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 import torch
+from omegaconf import OmegaConf
 from PIL import Image
 
 from ivcm.app import config as app_config
@@ -21,7 +22,12 @@ from ivcm.app.editing import (
     stamp_disk,
     stamp_stroke,
 )
-from ivcm.app.inference import mask_from_seg_logits, predicted_class, strip_criterion_state
+from ivcm.app.inference import (
+    disable_net_downloads,
+    mask_from_seg_logits,
+    predicted_class,
+    strip_criterion_state,
+)
 from ivcm.app.records import (
     MAX_PINNED,
     ImageRecord,
@@ -455,3 +461,25 @@ def test_build_config_non_frozen_is_the_local_config() -> None:
     # With no frozen state, the factory returns the machine-specific config unchanged (the module
     # CONFIG is that same object), so local `uv run ivcm-ui` behaviour is untouched.
     assert app_config.build_config() is app_config.CONFIG
+
+
+def test_disable_net_downloads_turns_off_pretrained_and_encoder_weights() -> None:
+    # Inference loads trained weights over the net, so any pretrained/ImageNet download at
+    # construction is waste — and it breaks a standalone/offline/windowed bundle. Both the timm
+    # (`pretrained`) and SMP (`encoder_weights`) knobs must be disabled before instantiation.
+    model_cfg = OmegaConf.create({"net": {"model_name": "resnet18", "pretrained": True, "encoder_weights": "imagenet"}})
+
+    disable_net_downloads(model_cfg)
+
+    assert model_cfg.net.pretrained is False
+    assert model_cfg.net.encoder_weights is None
+
+
+def test_disable_net_downloads_leaves_absent_keys_untouched() -> None:
+    # A net without those keys is left as-is (no keys spuriously added, no crash).
+    model_cfg = OmegaConf.create({"net": {"model_name": "resnet18"}})
+
+    disable_net_downloads(model_cfg)
+
+    assert "pretrained" not in model_cfg.net
+    assert "encoder_weights" not in model_cfg.net
