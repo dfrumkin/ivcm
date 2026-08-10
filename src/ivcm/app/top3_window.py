@@ -16,8 +16,9 @@ from ivcm.app.config import AppConfig
 from ivcm.app.mask_slider import alpha_from_slider, make_mask_slider
 from ivcm.app.qtimage import record_pixmap
 from ivcm.app.records import ImageRecord
+from ivcm.app.scaling_label import ScalingImageLabel
 
-_TILE = 320  # max side length of each tile's image
+_TILE = 320  # minimum side length of each tile's image (tiles grow past this with the window)
 
 
 class Top3Window(QWidget):
@@ -53,7 +54,7 @@ class Top3Window(QWidget):
 
         layout = QVBoxLayout(self)
         self._row = QHBoxLayout()
-        layout.addLayout(self._row)
+        layout.addLayout(self._row, 1)  # the tile row takes the vertical slack; the slider stays fixed
         self._slider = make_mask_slider(config, self._on_alpha_changed)
         layout.addWidget(self._slider, alignment=Qt.AlignmentFlag.AlignHCenter)
 
@@ -73,10 +74,23 @@ class Top3Window(QWidget):
         if not self._records:
             self._placeholder = QLabel("No nerve images selected.")
             self._row.addWidget(self._placeholder)
-            return
-        alpha = alpha_from_slider(self._slider.value())
-        for record in self._records:
-            self._row.addWidget(self._build_tile(record, alpha))
+        else:
+            alpha = alpha_from_slider(self._slider.value())
+            for record in self._records:
+                self._row.addWidget(self._build_tile(record, alpha), 1)  # tiles share width evenly
+        self._apply_minimum_size()
+
+    def _apply_minimum_size(self) -> None:
+        """Set the window's minimum to its layout's own minimum, so the current tiles always fit.
+
+        The layout minimum is derived from the real widgets (each tile image's ``_TILE`` minimum, the
+        metrics text, the buttons, and the slider) plus spacing and margins, so it stays honest as the
+        top-3 set changes rather than being a stale constant.
+        """
+        layout = self.layout()
+        if layout is not None:
+            layout.activate()
+            self.setMinimumSize(layout.minimumSize())
 
     def _clear(self) -> None:
         while self._row.count():
@@ -91,18 +105,10 @@ class Top3Window(QWidget):
         tile = QWidget()
         layout = QVBoxLayout(tile)
 
-        image_label = QLabel()
-        image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        pixmap = record_pixmap(record, self._config, alpha)
-        image_label.setPixmap(
-            pixmap.scaled(
-                _TILE,
-                _TILE,
-                Qt.AspectRatioMode.KeepAspectRatio,
-                Qt.TransformationMode.SmoothTransformation,
-            )
-        )
-        layout.addWidget(image_label)
+        image_label = ScalingImageLabel()
+        image_label.setMinimumSize(_TILE, _TILE)  # grows past this with the window, never below
+        image_label.set_source(record_pixmap(record, self._config, alpha))
+        layout.addWidget(image_label, 1)  # the image takes the height not used by text/buttons
 
         metrics = record.metrics or {}
         text = (

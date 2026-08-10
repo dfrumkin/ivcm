@@ -50,7 +50,7 @@ from ivcm.data import NonSquareImageError
 
 log = logging.getLogger(__name__)
 
-_PREVIEW = PREVIEW_MAX  # max side length of the side preview
+_PREVIEW = PREVIEW_MAX  # minimum side length of the side preview (also its launch-size budget)
 
 # Brush-size slider: radius in display pixels. The minimum paints roughly a single pixel; the
 # maximum is deliberately small so the brush stays a detail tool.
@@ -102,6 +102,9 @@ class MainWindow(QMainWindow):
         self.table.activated.connect(self._open_large)
         self.table.selectionModel().currentRowChanged.connect(self._on_current_changed)
         self._configure_columns()
+        # Fix the table to its column budget so window-resize slack flows to the preview (not the
+        # table), and so it is never squeezed below its columns (which would show an h-scrollbar).
+        self.table.setFixedWidth(self._table_width_budget())
 
         self.preview = EditablePreview(engine.config)
         self.preview.edit_started.connect(self._on_edit_started)
@@ -120,14 +123,15 @@ class MainWindow(QMainWindow):
         right_pane = QWidget()
         right_layout = QVBoxLayout(right_pane)
         right_layout.addWidget(self.summary_panel)
-        right_layout.addWidget(self.preview)
+        right_layout.addWidget(self.preview, 1)  # the preview takes the vertical slack in the pane
         right_layout.addWidget(self.mask_slider, alignment=Qt.AlignmentFlag.AlignHCenter)
         right_layout.addWidget(self._controls, alignment=Qt.AlignmentFlag.AlignHCenter)
 
         central = QWidget()
         layout = QHBoxLayout(central)
-        layout.addWidget(self.table, 2)
-        layout.addWidget(right_pane, 1)
+        self._central_layout = layout  # kept so the window minimum can read the layout's own minimum
+        layout.addWidget(self.table)
+        layout.addWidget(right_pane, 1)  # horizontal slack flows to the right pane, enlarging the preview
         self.setCentralWidget(central)
 
         self.top3_window = Top3Window(engine.config)
@@ -138,6 +142,9 @@ class MainWindow(QMainWindow):
 
         self._build_toolbar()
         self._update_preview()  # nothing selected yet: placeholder, Edit + blender disabled
+        # Set the floor before the launch size so the window can never be shrunk below "everything
+        # fits" (computed once the whole UI, including the toolbar and status bar, is built).
+        self.setMinimumSize(self._minimum_size())
         self.resize(self._initial_size())
 
     def _configure_columns(self) -> None:
@@ -152,23 +159,43 @@ class MainWindow(QMainWindow):
         # Names longer than the column are ellided rather than widening the table.
         header.setSectionResizeMode(2, QHeaderView.ResizeMode.Interactive)
 
-    def _initial_size(self) -> QSize:
-        """Window size that shows all six table columns plus the preview, with no h-scrollbar.
+    def _table_width_budget(self) -> int:
+        """Width that shows all six columns with no h-scrollbar: columns plus the table's chrome.
 
-        Budgets the sum of column widths, the vertical header, the table frame, and a
+        Budgets the sum of column widths, the table frame, the vertical header, and a
         vertical-scrollbar-width allowance (so columns still fit once enough rows show a vertical
-        scrollbar), then adds the preview pane and layout margins. The height adds the summary
-        panel's own height on top of the previous budget, so the panel costs the preview nothing.
+        scrollbar). The table is fixed to this width so it neither grows into (nor is squeezed
+        below) its column budget as the window resizes.
         """
         columns = _PIN_WIDTH + _USE_WIDTH + _NAME_WIDTH + 3 * _METRIC_WIDTH
         frame = 2 * self.table.frameWidth()
         vheader = self.table.verticalHeader().sizeHint().width()
         scrollbar = self.style().pixelMetric(self.style().PixelMetric.PM_ScrollBarExtent)
-        table_width = columns + frame + vheader + scrollbar
-        width = table_width + _PREVIEW + 60  # 60: central-layout margins/spacing slack
+        return columns + frame + vheader + scrollbar
+
+    def _initial_size(self) -> QSize:
+        """Launch size showing the full table plus a comfortably-sized preview.
+
+        The preview grows with the window past this, but this is where it opens. The height adds the
+        summary panel's own height on top of the preview budget, so the panel costs the preview
+        nothing.
+        """
+        width = self._table_width_budget() + _PREVIEW + 60  # 60: central-layout margins/spacing slack
         # The panel has a fixed height, so its minimum is its real height (its size *hint* shrinks
         # to the placeholder while nothing is selected, which is not what the layout will give it).
         return QSize(width, 700 + self.summary_panel.minimumHeight())
+
+    def _minimum_size(self) -> QSize:
+        """Smallest size that still fits everything: the central layout's minimum plus window chrome.
+
+        The central layout's own minimum already accounts for the fixed-width table, the preview's
+        minimum side, the summary panel, the mask slider, and the edit controls, plus spacing and
+        margins. Add the toolbar and status-bar heights so the "everything fits" floor holds for the
+        whole window, not just the central area.
+        """
+        central = self._central_layout.minimumSize()
+        chrome = self.toolbar.sizeHint().height() + self.statusBar().sizeHint().height()
+        return QSize(central.width(), central.height() + chrome)
 
     def _build_toolbar(self) -> None:
         toolbar = QToolBar()
@@ -804,7 +831,7 @@ class MainWindow(QMainWindow):
     def _update_preview(self) -> None:
         record = self._current_record()
         if record is None:
-            self.preview.setText("Select an image")
+            self.preview.show_message("Select an image")
             self._edit_button.setEnabled(False)
             self.mask_slider.setEnabled(False)  # the blender does nothing with no image showing
             return

@@ -10,16 +10,18 @@ from __future__ import annotations
 
 import numpy as np
 from PySide6.QtCore import QPoint, QPointF, Qt, Signal
-from PySide6.QtGui import QColor, QCursor, QEnterEvent, QMouseEvent, QPainter, QPen, QPixmap
-from PySide6.QtWidgets import QLabel
+from PySide6.QtGui import QColor, QCursor, QEnterEvent, QMouseEvent, QPainter, QPen, QPixmap, QResizeEvent
 
 from ivcm.app.config import AppConfig
 from ivcm.app.editing import brush_cursor_spec, map_to_mask, mask_changed, stamp_disk, stamp_stroke
 from ivcm.app.qtimage import numpy_to_pixmap, record_pixmap
 from ivcm.app.records import ImageRecord
 from ivcm.app.render import overlay
+from ivcm.app.scaling_label import ScalingImageLabel
 
-PREVIEW_MAX = 500  # max side length of the side preview (shared with the main window's layout budget)
+# Minimum side length of the side preview; the preview grows past this with the window (see
+# ScalingImageLabel). Also feeds the main window's initial/minimum layout width budget.
+PREVIEW_MAX = 500
 
 # Brush-cursor colors (cursor-only; independent of the overlay mask color): pink marks the paint
 # function (idle or left button), cyan marks erase (right button).
@@ -27,9 +29,10 @@ _PAINT_CURSOR_COLOR = QColor(255, 105, 180)
 _ERASE_CURSOR_COLOR = QColor(0, 200, 220)
 
 
-class EditablePreview(QLabel):
+class EditablePreview(ScalingImageLabel):
     """The overlay preview; in edit mode it paints the working mask under the mouse.
 
+    The image scales with the widget (see :class:`ScalingImageLabel`) in both normal and edit mode.
     ``edit_started`` fires on each stroke's first press so the main window can apply the blender
     floor; ``stroke_committed`` fires when a stroke that changed the mask ends so the main window can
     record an undo-history entry.
@@ -41,8 +44,8 @@ class EditablePreview(QLabel):
     def __init__(self, config: AppConfig) -> None:
         super().__init__("Select an image")
         self._config = config
-        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.setMinimumWidth(PREVIEW_MAX)
+        # The preview may grow past this with the window, but never shrinks below it.
+        self.setMinimumSize(PREVIEW_MAX, PREVIEW_MAX)
 
         self._editing = False
         self._base_image: np.ndarray | None = None
@@ -59,15 +62,7 @@ class EditablePreview(QLabel):
 
     def display(self, record: ImageRecord, config: AppConfig, alpha: float) -> None:
         """Show ``record``'s overlay (or plain image) scaled to fit — the non-editing preview."""
-        pixmap = record_pixmap(record, config, alpha)
-        self.setPixmap(
-            pixmap.scaled(
-                PREVIEW_MAX,
-                PREVIEW_MAX,
-                Qt.AspectRatioMode.KeepAspectRatio,
-                Qt.TransformationMode.SmoothTransformation,
-            )
-        )
+        self.set_source(record_pixmap(record, config, alpha))
 
     # --- edit mode -------------------------------------------------------
 
@@ -130,15 +125,7 @@ class EditablePreview(QLabel):
         if self._base_image is None or self._working_mask is None:
             return
         rgb = overlay(self._base_image, self._working_mask, self._config.mask_color, self._alpha)
-        pixmap = numpy_to_pixmap(rgb)
-        self.setPixmap(
-            pixmap.scaled(
-                PREVIEW_MAX,
-                PREVIEW_MAX,
-                Qt.AspectRatioMode.KeepAspectRatio,
-                Qt.TransformationMode.SmoothTransformation,
-            )
-        )
+        self.set_source(numpy_to_pixmap(rgb))
 
     # --- cursor ----------------------------------------------------------
 
@@ -220,6 +207,13 @@ class EditablePreview(QLabel):
             self._update_cursor(event.position())
         else:
             super().enterEvent(event)
+
+    def resizeEvent(self, event: QResizeEvent) -> None:
+        # Rescale the displayed pixmap first (base class), then refresh the cursor so its hit-test
+        # reads the newly scaled pixmap size rather than the pre-resize one.
+        super().resizeEvent(event)
+        if self._editing:
+            self._update_cursor(self.mapFromGlobal(QCursor.pos()))
 
     # --- painting --------------------------------------------------------
 
