@@ -7,9 +7,11 @@ from importlib import resources
 from pathlib import Path
 
 import numpy as np
+import pytest
 import torch
 from PIL import Image
 
+from ivcm.app import config as app_config
 from ivcm.app.editing import (
     EditHistory,
     brush_cursor_spec,
@@ -418,3 +420,38 @@ def test_app_icon_is_packaged_and_square() -> None:
     image = Image.open(io.BytesIO(data))
     assert image.format == "PNG"
     assert image.width == image.height
+
+
+def test_build_config_frozen_redirects_only_model_paths(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    # In a PyInstaller bundle (sys.frozen / sys._MEIPASS), the two model (run_dir, ckpt) pairs must
+    # resolve under the bundled models/ directory, while every other operational field is carried
+    # over unchanged (dataclasses.replace guards against silently dropping defaults).
+    monkeypatch.setattr(app_config.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(app_config.sys, "_MEIPASS", str(tmp_path), raising=False)
+
+    frozen = app_config.build_config()
+
+    cls = frozen.classification
+    assert cls.run_path() == tmp_path / "models" / "cls"
+    assert cls.ckpt_path() == tmp_path / "models" / "cls" / "best-weights.ckpt"
+    assert cls.config_path() == tmp_path / "models" / "cls" / ".hydra" / "config.yaml"
+    seg = frozen.segmentation
+    assert seg.run_path() == tmp_path / "models" / "seg"
+    assert seg.ckpt_path() == tmp_path / "models" / "seg" / "best-weights.ckpt"
+
+    # Non-path operational defaults preserved verbatim.
+    base = app_config.CONFIG
+    assert frozen.physical_image_size == base.physical_image_size
+    assert frozen.sigma == base.sigma
+    assert frozen.min_size == base.min_size
+    assert frozen.batch_size == base.batch_size
+    assert frozen.num_workers == base.num_workers
+    assert frozen.accepted_extensions == base.accepted_extensions
+    assert frozen.mask_color == base.mask_color
+    assert frozen.mask_alpha == base.mask_alpha
+
+
+def test_build_config_non_frozen_is_the_local_config() -> None:
+    # With no frozen state, the factory returns the machine-specific config unchanged (the module
+    # CONFIG is that same object), so local `uv run ivcm-ui` behaviour is untouched.
+    assert app_config.build_config() is app_config.CONFIG

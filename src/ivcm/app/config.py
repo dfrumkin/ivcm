@@ -20,7 +20,8 @@ MPS/CPU). See the README's "Using a trained model in the UI".
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+import sys
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 # Repo root: ``.../ivcm_vibe`` from ``.../ivcm_vibe/src/ivcm/app/config.py`` (parents[3]).
@@ -95,7 +96,7 @@ class AppConfig:
 
 # Edit these to this machine's trained runs. Both ``run_dir`` values must contain
 # ``.hydra/config.yaml``; both ``ckpt`` values must point at a real checkpoint under the run.
-CONFIG = AppConfig(
+_LOCAL_CONFIG = AppConfig(
     classification=ModelConfig(
         run_dir="/Users/dmitry/ivcm-models/cls",
         ckpt="/Users/dmitry/ivcm-models/cls/best-weights.ckpt",
@@ -105,3 +106,35 @@ CONFIG = AppConfig(
         ckpt="/Users/dmitry/ivcm-models/seg/best-weights.ckpt",
     ),
 )
+
+
+def _frozen_model_config(base: Path, name: str) -> ModelConfig:
+    """A ``ModelConfig`` pointing at the bundled ``models/<name>`` directory under ``base``.
+
+    Matches the layout the PyInstaller spec bundles: ``models/<name>/best-weights.ckpt`` and
+    ``models/<name>/.hydra/config.yaml`` (the latter via ``ModelConfig.config_path()``).
+    """
+    run_dir = base / "models" / name
+    return ModelConfig(run_dir=str(run_dir), ckpt=str(run_dir / "best-weights.ckpt"))
+
+
+def build_config() -> AppConfig:
+    """Build the application configuration for the current runtime.
+
+    In a normal checkout this is the machine-specific ``_LOCAL_CONFIG`` above (edited to point at
+    this machine's trained runs). In a PyInstaller one-folder bundle (``sys.frozen``), the two model
+    ``(run_dir, ckpt)`` pairs are redirected to the ``models/cls`` and ``models/seg`` directories
+    bundled under ``sys._MEIPASS``; every other field is carried over unchanged via
+    :func:`dataclasses.replace`, so operational settings can never be dropped by the redirect.
+    """
+    if getattr(sys, "frozen", False):
+        base = Path(getattr(sys, "_MEIPASS", ""))  # PyInstaller sets _MEIPASS to the bundle root
+        return replace(
+            _LOCAL_CONFIG,
+            classification=_frozen_model_config(base, "cls"),
+            segmentation=_frozen_model_config(base, "seg"),
+        )
+    return _LOCAL_CONFIG
+
+
+CONFIG = build_config()

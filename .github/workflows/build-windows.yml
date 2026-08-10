@@ -1,0 +1,102 @@
+name: Build Windows app
+
+# Triggered only on app release tags (v*). The separate models-* asset tags never trigger a build.
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write  # publish the built zip as a release asset with the built-in token
+
+env:
+  # The immutable model revision to bundle. Bump this (and publish that tag with
+  # scripts/publish_models.py --tag models-vN) to ship new weights.
+  MODELS_TAG: models-v1
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6
+
+      - name: Pin Python 3.12
+        run: uv python install  # honours .python-version so the frozen ABI can't drift
+
+      - name: Install locked build environment
+        run: uv sync --frozen --extra ui --no-dev --group packaging
+
+      - name: Download bundled models
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download $env:MODELS_TAG --pattern ivcm-models.zip --dir .
+          Expand-Archive -Path ivcm-models.zip -DestinationPath models -Force
+
+      - name: Validate model layout
+        run: |
+          $required = @(
+            "models/cls/best-weights.ckpt",
+            "models/cls/.hydra/config.yaml",
+            "models/seg/best-weights.ckpt",
+            "models/seg/.hydra/config.yaml"
+          )
+          foreach ($f in $required) {
+            if (-not (Test-Path $f)) { Write-Error "Missing model file: $f"; exit 1 }
+          }
+
+      - name: Freeze with PyInstaller
+        run: uv run pyinstaller ivcm-ui.spec --noconfirm
+
+      - name: Smoke-test the frozen app (--self-check)
+        run: |
+          $exe = "dist/ivcm-ui/ivcm-ui.exe"
+          $p = Start-Process -FilePath $exe -ArgumentList '--self-check' -PassThru `
+                 -RedirectStandardError selfcheck-stderr.txt -RedirectStandardOutput selfcheck-stdout.txt
+          $p | Wait-Process -Timeout 300 -ErrorAction SilentlyContinue
+          $failed = $false
+          if (-not $p.HasExited) {
+            Write-Host "self-check timed out after 300s"
+            Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+            $failed = $true
+          } elseif ($p.ExitCode -ne 0) {
+            Write-Host "self-check failed with exit code $($p.ExitCode)"
+            $failed = $true
+          }
+          # Dump both diagnostic sources whenever they exist (in-app log + redirected stderr).
+          $log = Join-Path $env:TEMP "ivcm-selfcheck.log"
+          if (Test-Path $log) { Write-Host "--- ivcm-selfcheck.log ---"; Get-Content $log }
+          if (Test-Path selfcheck-stderr.txt) { Write-Host "--- stderr ---"; Get-Content selfcheck-stderr.txt }
+          if ($failed) { exit 1 }
+          Write-Host "self-check passed"
+
+      - name: Assert required runtime DLLs are bundled
+        run: |
+          # Artifact-content check: the runner already has these, so a passing self-check does not
+          # prove they are bundled. Guarantees a clean customer machine needs no redistributable.
+          $required = @("qwindows.dll", "vcruntime140.dll", "vcruntime140_1.dll", "msvcp140.dll")
+          foreach ($dll in $required) {
+            $found = Get-ChildItem -Path dist/ivcm-ui -Recurse -Filter $dll -ErrorAction SilentlyContinue
+            if (-not $found) { Write-Error "Missing bundled runtime DLL: $dll"; exit 1 }
+          }
+
+      - name: Zip and size-guard
+        run: |
+          Compress-Archive -Path dist/ivcm-ui -DestinationPath ivcm-ui-windows.zip -Force
+          $bytes = (Get-Item ivcm-ui-windows.zip).Length
+          $limit = [int64](1.8 * 1024 * 1024 * 1024)  # below GitHub's 2 GiB per-asset limit
+          if ($bytes -gt $limit) {
+            $gib = [math]::Round($bytes / 1GB, 2)
+            Write-Error "Bundle zip is $gib GiB (> 1.8 GiB); use split-asset or out-of-band delivery."
+            exit 1
+          }
+
+      - name: Publish app zip to the release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ivcm-ui-windows.zip
+          fail_on_unmatched_files: true  # fail hard if the asset ever goes missing, don't publish empty

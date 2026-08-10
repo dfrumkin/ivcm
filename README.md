@@ -161,11 +161,66 @@ derived per-platform deliverables from it (run `uv run python scripts/make_icons
 artwork changes; the generated files are committed). The `.icns` step needs macOS `iconutil` and is
 skipped with a warning elsewhere.
 
-A future bundler/installer (none exists today) uses, per platform: `icon.icns` (macOS),
-`icon.ico` (Windows), and the freedesktop `linux/hicolor/<size>x<size>/apps/ivcm-ui.png` tree plus
+Per platform the derived assets are: `icon.icns` (macOS), `icon.ico` (Windows — used by the Windows
+build below), and the freedesktop `linux/hicolor/<size>x<size>/apps/ivcm-ui.png` tree plus
 `ivcm-ui.desktop` (Linux). To install on Linux by hand, copy the `hicolor` tree under
 `~/.local/share/icons` (or `/usr/share/icons`) and `ivcm-ui.desktop` into the matching
 `applications/` directory (adjusting its `Exec=` if `ivcm-ui` is not on `PATH`).
+
+## Packaging a Windows build
+
+The UI can be delivered to a non-technical user as a **self-contained Windows folder** — no Python,
+no installation, no configuration. It is frozen with **PyInstaller** (one-folder mode) on GitHub
+Actions and published as a zipped release asset. The trained models are **bundled inside** the app,
+so the user only downloads and unzips one thing.
+
+**Supported target: 64-bit Windows 10/11.** The bundle carries the Microsoft Visual C++ runtime DLLs
+it needs (the build asserts they are present), so a clean machine needs nothing installed; the VC++
+Redistributable is only a last-resort note for an unusually bare Windows install.
+
+### 1. Publish the models (once per model revision)
+
+The build bundles the two weights-only checkpoints and their Hydra configs from a dedicated GitHub
+release asset (`ivcm-models.zip`), keeping large weights out of git history.
+[`scripts/publish_models.py`](scripts/publish_models.py) stages, zips, and uploads it in one command,
+reading the two `(run_dir, ckpt)` pairs straight from [`src/ivcm/app/config.py`](src/ivcm/app/config.py)
+(so it always matches what the UI points at). It needs the GitHub CLI authenticated once
+(`gh auth login`, or a `GH_TOKEN` env var):
+
+```bash
+uv run python scripts/publish_models.py                  # -> release tag models-v1
+uv run python scripts/publish_models.py --tag models-v2  # a new, immutable model revision
+```
+
+**Model revisions are immutable.** Changing the weights means a **new tag** (`models-v2`, …) plus
+bumping `MODELS_TAG` in the workflow — not overwriting a live one, so a given app build stays
+reproducible. The script therefore refuses to overwrite an already-published `ivcm-models.zip` by
+default; `--force` (which passes `gh release upload --clobber`) exists **only** to fix an upload no
+build has consumed yet, never to swap model contents under a tag.
+
+### 2. Build and publish the app
+
+[`.github/workflows/build-windows.yml`](.github/workflows/build-windows.yml) builds on a
+`windows-latest` runner. It is triggered by **pushing an app tag `v*`** (the `models-*` tags never
+trigger it). The workflow pins Python 3.12, installs the locked environment, downloads the
+`MODELS_TAG` models asset, freezes the app, **smoke-tests the frozen exe** (`--self-check`: real
+startup plus one synthetic classify → segment → morphometry pass; nothing is published if it fails),
+zips the one-folder output, and attaches the zip to the `v*` release.
+
+```bash
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+### 3. Deliver to the customer
+
+The zip is attached to the `v*` GitHub release. If the repo is **private**, the customer needs repo
+access for the release link to work; otherwise download the zip yourself and hand it over out of band
+(shared drive / file-transfer link). The customer unzips it and runs `ivcm-ui.exe` inside the folder.
+
+On first run, Windows SmartScreen shows an **"unknown publisher"** warning for the unsigned app —
+the user clicks **More info → Run anyway**. (Removing the warning needs a paid code-signing
+certificate and is out of scope.)
 
 ## Training
 

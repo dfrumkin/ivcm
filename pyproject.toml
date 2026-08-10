@@ -44,9 +44,16 @@ dev = [
     "pre-commit",
     "pytest",
 ]
+# Windows packaging: PyInstaller freezes the UI into a distributable one-folder bundle. Kept in its
+# own group so training/inference runtimes and CI that only run the pipeline need not install it;
+# the Windows build workflow syncs it with `--group packaging`.
+packaging = [
+    "pyinstaller",
+]
 
 [tool.pyright]
 include = ["src", "tests"]
+extraPaths = ["src", "scripts"]
 venvPath = "."
 venv = ".venv"
 pythonVersion = "3.12"
