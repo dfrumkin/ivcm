@@ -14,7 +14,13 @@ dist/
 .DS_Store
 
 # Project working artifact
-plans/current.md
+plans/
+
+# Agent configuration
+AGENTS.md
+CLAUDE.md
+.claude
+.codex
 
 # ML outputs (anticipated)
 wandb/
