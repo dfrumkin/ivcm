@@ -3,8 +3,8 @@
 A *label directory* holds exactly a ``summary.csv`` file and a ``masks/`` directory:
 
 - ``summary.csv`` has one row per :class:`~ivcm.app.records.ImageRecord`, columns
-  ``Pin,Use,Name,Density,Area,Perimeter`` (booleans as ``True``/``False``; metrics at full float
-  precision or empty when the record has no metrics).
+  ``Pin,Use,Name,Count,Density,Area,Perimeter`` (booleans as ``True``/``False``; metrics at full
+  float precision or empty when the record has no metrics).
 - ``masks/`` holds one single-channel PNG per record that has a mask, named ``<image-name>.png``
   (the full image file name with ``.png`` appended, so mixed extensions never collide). Masks are
   the standard binary convention -- ``uint8`` mode-``L``, ``0`` background / ``255`` foreground --
@@ -34,8 +34,8 @@ from ivcm.app.records import MAX_PINNED, ImageRecord
 
 SUMMARY_CSV = "summary.csv"
 MASKS_DIR = "masks"
-CSV_HEADER = ["Pin", "Use", "Name", "Density", "Area", "Perimeter"]
-_METRIC_KEYS = ("density", "area", "perimeter")
+CSV_HEADER = ["Pin", "Use", "Name", "Count", "Density", "Area", "Perimeter"]
+_METRIC_KEYS = ("count", "density", "area", "perimeter")
 _PNG_SUFFIX = ".png"
 
 # System files that may sit alongside our own files without meaning the directory is "not ours":
@@ -81,9 +81,9 @@ def _check_coupling(records: Sequence[ImageRecord]) -> None:
 
 
 def _summary_row(record: ImageRecord) -> list[object]:
-    """One ``summary.csv`` row: Pin, Use, Name, and the three metrics (or empty when unmeasured)."""
+    """One ``summary.csv`` row: Pin, Use, Name, and the four metrics (or empty when unmeasured)."""
     metrics = record.metrics
-    cells: list[object] = ["", "", ""] if metrics is None else [metrics[key] for key in _METRIC_KEYS]
+    cells: list[object] = [""] * len(_METRIC_KEYS) if metrics is None else [metrics[key] for key in _METRIC_KEYS]
     return [record.pinned, record.is_nerve, record.name, *cells]
 
 
@@ -209,7 +209,7 @@ def _is_bare_filename(name: str) -> bool:
 
 
 def _parse_metrics(cells: Sequence[str], row_number: int) -> dict[str, float] | None:
-    """The three metric cells as a dict, ``None`` if all empty, or a ``BadLabelFormatError`` if partial."""
+    """The four metric cells as a dict, ``None`` if all empty, or a ``BadLabelFormatError`` if partial."""
     present = [cell.strip() != "" for cell in cells]
     if not any(present):
         return None
@@ -244,7 +244,7 @@ def _read_summary(path: Path) -> list[_Row]:
         name = cells[2]
         if not _is_bare_filename(name):
             raise BadLabelFormatError(f"row {row_number}: invalid Name {name!r}")
-        metrics = _parse_metrics(cells[3:6], row_number)
+        metrics = _parse_metrics(cells[3 : 3 + len(_METRIC_KEYS)], row_number)
         rows.append(_Row(pin=pin, use=use, name=name, metrics=metrics))
     return rows
 

@@ -51,16 +51,17 @@ A simple PySide6 desktop app for reviewing a directory of images. The doctor sta
 labels?"** — **Create** runs the pipeline afresh, **Load** re-opens results saved earlier for that
 directory (see [Saving and loading labels](#saving-and-loading-labels) below), and **Cancel** steps
 back. When creating, the app classifies each image, segments the predicted-"nerve" ones, runs the
-existing morphometry (`ivcm.morphometry`), and shows a folder-like table — **name, density, area,
-perimeter** (in
+existing morphometry (`ivcm.morphometry`), and shows a folder-like table — **name, count, density,
+area, perimeter** (area/perimeter are per-cell averages, not per-image totals; all in
 physical units derived from the configured `physical_image_size`, not raw pixels) — with a per-row
 **Use** checkbox (the manual nerve / not-nerve label), a **Pin** checkbox before it, and mask
 overlays. Pinned rows sort to the very top (before the other checked rows); pinning an image also
 checks **Use** (segmenting it if needed), and at most three images may be pinned (a fourth attempt
 just warns). Unchecking **Use** also unpins. Selecting a row previews the overlay on the side;
-above that preview a compact panel summarises the checked images — the count, plus a small
-distribution strip per metric (over a `0`-to-max axis) marking the mean, ±1 SD, and min/max, with
-the exact numbers on hover. Double-click / Enter opens an image large in a blocking window. A
+above that preview a compact panel summarises the checked images — the count of selected images
+("Nerve Images:"), plus a small distribution strip per metric (count, density, area, perimeter,
+over a `0`-to-max axis) marking the mean, ±1 SD, and min/max, with the exact numbers on hover.
+Double-click / Enter opens an image large in a blocking window. A
 second window stays in sync showing the top-3 checked images (pinned first) with their metrics and,
 per image, a pin toggle (**Unpin** when pinned, **Pin** otherwise — pinning here obeys the same
 three-pin limit) and a **Don't Use** button. Checking a non-nerve
@@ -87,8 +88,8 @@ that directory. If the chosen target already exists and is a label directory the
 **Overwrite**/**Cancel**; if it holds anything else it is left untouched (a single **OK**, then pick
 again). A label directory contains:
 
-- `summary.csv` — one row per reviewed image: `Pin,Use,Name,Density,Area,Perimeter` (images that
-  failed to load/classify are skipped and have no row).
+- `summary.csv` — one row per reviewed image: `Pin,Use,Name,Count,Density,Area,Perimeter` (images
+  that failed to load/classify are skipped and have no row).
 - `masks/` — one single-channel PNG per segmented image (`0` background, `255` foreground), named
   after the image (`foo.tif` → `masks/foo.tif.png`).
 
@@ -486,7 +487,7 @@ src/ivcm/
   train.py     # Hydra entry point (`train` console script)
   cv.py        # segmentation cross-validation (`cross-validate` console script)
   predict.py   # out-of-fold prediction volume from a finished CV run (`predict-cv` script)
-  morphometry.py  # dendritic-cell density/area/perimeter from a 2D mask (smoothed-contour)
+  morphometry.py  # dendritic-cell count/density/avg-area/avg-perimeter from a 2D mask (smoothed-contour)
 tests/         # fold + config + metric-key + smoke + predict tests; real-data tests (skip if no data)
 configs/       # Hydra configuration tree
 ```

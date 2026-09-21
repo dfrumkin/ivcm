@@ -34,7 +34,7 @@ def _mask(pattern: tuple[tuple[int, ...], ...]) -> np.ndarray:
 
 
 def _record(image_dir: Path, name: str, *, use: bool, pin: bool = False, mask: np.ndarray | None = None) -> ImageRecord:
-    metrics = None if mask is None else {"density": 1.5, "area": 2.5, "perimeter": 3.5}
+    metrics = None if mask is None else {"count": 4.0, "density": 1.5, "area": 2.5, "perimeter": 3.5}
     return ImageRecord(path=image_dir / name, is_nerve=use, pinned=pin, mask=mask, metrics=metrics)
 
 
@@ -72,7 +72,7 @@ def test_round_trip_reconstructs_records_and_masks(tmp_path: Path) -> None:
     assert normalized is False  # an app-written directory needs no normalization
     by_name = {r.name: r for r in loaded}
     assert by_name["a.tif"].pinned and by_name["a.tif"].is_nerve
-    assert by_name["a.tif"].metrics == {"density": 1.5, "area": 2.5, "perimeter": 3.5}
+    assert by_name["a.tif"].metrics == {"count": 4.0, "density": 1.5, "area": 2.5, "perimeter": 3.5}
     np.testing.assert_array_equal(by_name["a.tif"].mask, mask)
     assert by_name["b.tif"].mask is None and by_name["b.tif"].metrics is None
     assert not by_name["b.tif"].is_nerve
@@ -122,7 +122,7 @@ def _write_summary(label_dir: Path, rows: list[list[object]]) -> None:
     (label_dir / MASKS_DIR).mkdir(exist_ok=True)
     with (label_dir / SUMMARY_CSV).open("w", newline="", encoding="utf-8") as handle:
         writer = csv.writer(handle)
-        writer.writerow(["Pin", "Use", "Name", "Density", "Area", "Perimeter"])
+        writer.writerow(["Pin", "Use", "Name", "Count", "Density", "Area", "Perimeter"])
         writer.writerows(rows)
 
 
@@ -143,7 +143,7 @@ def test_missing_masks_dir_is_bad_format(tmp_path: Path) -> None:
     _make_images(image_dir, ["a.tif"])
     label_dir = tmp_path / "labels"
     label_dir.mkdir()
-    (label_dir / SUMMARY_CSV).write_text("Pin,Use,Name,Density,Area,Perimeter\n")
+    (label_dir / SUMMARY_CSV).write_text("Pin,Use,Name,Count,Density,Area,Perimeter\n")
     with pytest.raises(BadLabelFormatError):
         load_labels(image_dir, label_dir, _EXTS)
 
@@ -162,7 +162,7 @@ def test_partial_metric_triple_is_bad_format(tmp_path: Path) -> None:
     image_dir = tmp_path / "images"
     _make_images(image_dir, ["a.tif"])
     label_dir = tmp_path / "labels"
-    _write_summary(label_dir, [["False", "True", "a.tif", "1.0", "", ""]])  # density only
+    _write_summary(label_dir, [["False", "True", "a.tif", "1.0", "", "", ""]])  # count only
     with pytest.raises(BadLabelFormatError):
         load_labels(image_dir, label_dir, _EXTS)
 
@@ -172,7 +172,7 @@ def test_path_like_name_is_bad_format(tmp_path: Path, name: str) -> None:
     image_dir = tmp_path / "images"
     _make_images(image_dir, ["a.tif"])
     label_dir = tmp_path / "labels"
-    _write_summary(label_dir, [["False", "False", name, "", "", ""]])
+    _write_summary(label_dir, [["False", "False", name, "", "", "", ""]])
     with pytest.raises(BadLabelFormatError):
         load_labels(image_dir, label_dir, _EXTS)
 
@@ -181,7 +181,7 @@ def test_metrics_without_mask_is_bad_format(tmp_path: Path) -> None:
     image_dir = tmp_path / "images"
     _make_images(image_dir, ["a.tif"], size=(2, 2))
     label_dir = tmp_path / "labels"
-    _write_summary(label_dir, [["False", "True", "a.tif", "1.0", "2.0", "3.0"]])  # metrics, no mask file
+    _write_summary(label_dir, [["False", "True", "a.tif", "4.0", "1.0", "2.0", "3.0"]])  # metrics, no mask file
     with pytest.raises(BadLabelFormatError):
         load_labels(image_dir, label_dir, _EXTS)
 
@@ -190,7 +190,7 @@ def test_mask_without_metrics_is_bad_format(tmp_path: Path) -> None:
     image_dir = tmp_path / "images"
     _make_images(image_dir, ["a.tif"], size=(2, 2))
     label_dir = tmp_path / "labels"
-    _write_summary(label_dir, [["False", "True", "a.tif", "", "", ""]])  # no metrics
+    _write_summary(label_dir, [["False", "True", "a.tif", "", "", "", ""]])  # no metrics
     _write_image(label_dir / MASKS_DIR / mask_filename("a.tif"), size=(2, 2))  # but a mask file exists
     with pytest.raises(BadLabelFormatError):
         load_labels(image_dir, label_dir, _EXTS)
@@ -200,7 +200,7 @@ def test_non_png_in_masks_is_bad_format(tmp_path: Path) -> None:
     image_dir = tmp_path / "images"
     _make_images(image_dir, ["a.tif"])
     label_dir = tmp_path / "labels"
-    _write_summary(label_dir, [["False", "False", "a.tif", "", "", ""]])
+    _write_summary(label_dir, [["False", "False", "a.tif", "", "", "", ""]])
     (label_dir / MASKS_DIR / "stray.txt").write_text("not a mask")
     with pytest.raises(BadLabelFormatError):
         load_labels(image_dir, label_dir, _EXTS)
@@ -210,7 +210,7 @@ def test_corrupt_mask_is_bad_format(tmp_path: Path) -> None:
     image_dir = tmp_path / "images"
     _make_images(image_dir, ["a.tif"], size=(2, 2))
     label_dir = tmp_path / "labels"
-    _write_summary(label_dir, [["False", "True", "a.tif", "1.0", "2.0", "3.0"]])
+    _write_summary(label_dir, [["False", "True", "a.tif", "4.0", "1.0", "2.0", "3.0"]])
     (label_dir / MASKS_DIR / mask_filename("a.tif")).write_bytes(b"not a real png")
     with pytest.raises(BadLabelFormatError):
         load_labels(image_dir, label_dir, _EXTS)
@@ -223,7 +223,7 @@ def test_unknown_name_is_mismatch(tmp_path: Path) -> None:
     image_dir = tmp_path / "images"
     _make_images(image_dir, ["a.tif"])
     label_dir = tmp_path / "labels"
-    _write_summary(label_dir, [["False", "False", "ghost.tif", "", "", ""]])
+    _write_summary(label_dir, [["False", "False", "ghost.tif", "", "", "", ""]])
     with pytest.raises(LabelMismatchError):
         load_labels(image_dir, label_dir, _EXTS)
 
@@ -232,7 +232,7 @@ def test_dangling_mask_is_mismatch(tmp_path: Path) -> None:
     image_dir = tmp_path / "images"
     _make_images(image_dir, ["a.tif"], size=(2, 2))
     label_dir = tmp_path / "labels"
-    _write_summary(label_dir, [["False", "False", "a.tif", "", "", ""]])
+    _write_summary(label_dir, [["False", "False", "a.tif", "", "", "", ""]])
     _write_image(label_dir / MASKS_DIR / mask_filename("b.tif"), size=(2, 2))  # no row for b
     with pytest.raises(LabelMismatchError):
         load_labels(image_dir, label_dir, _EXTS)
@@ -242,7 +242,7 @@ def test_mask_resolution_mismatch(tmp_path: Path) -> None:
     image_dir = tmp_path / "images"
     _make_images(image_dir, ["a.tif"], size=(4, 4))
     label_dir = tmp_path / "labels"
-    _write_summary(label_dir, [["False", "True", "a.tif", "1.0", "2.0", "3.0"]])
+    _write_summary(label_dir, [["False", "True", "a.tif", "4.0", "1.0", "2.0", "3.0"]])
     _write_image(label_dir / MASKS_DIR / mask_filename("a.tif"), size=(2, 2))  # wrong size
     with pytest.raises(LabelMismatchError):
         load_labels(image_dir, label_dir, _EXTS)
@@ -252,7 +252,7 @@ def test_non_square_referenced_image_is_mismatch(tmp_path: Path) -> None:
     image_dir = tmp_path / "images"
     _make_images(image_dir, ["a.tif"], size=(4, 8))  # non-square
     label_dir = tmp_path / "labels"
-    _write_summary(label_dir, [["False", "False", "a.tif", "", "", ""]])
+    _write_summary(label_dir, [["False", "False", "a.tif", "", "", "", ""]])
     with pytest.raises(LabelMismatchError):
         load_labels(image_dir, label_dir, _EXTS)
 
@@ -262,7 +262,7 @@ def test_unreadable_referenced_image_is_mismatch(tmp_path: Path) -> None:
     image_dir.mkdir()
     (image_dir / "a.tif").write_bytes(b"not an image")  # accepted extension, but corrupt
     label_dir = tmp_path / "labels"
-    _write_summary(label_dir, [["False", "False", "a.tif", "", "", ""]])
+    _write_summary(label_dir, [["False", "False", "a.tif", "", "", "", ""]])
     with pytest.raises(LabelMismatchError):
         load_labels(image_dir, label_dir, _EXTS)
 
@@ -272,7 +272,7 @@ def test_image_absent_from_csv_loads_fine(tmp_path: Path) -> None:
     image_dir = tmp_path / "images"
     _make_images(image_dir, ["a.tif", "extra.tif"], size=(2, 2))
     label_dir = tmp_path / "labels"
-    _write_summary(label_dir, [["False", "False", "a.tif", "", "", ""]])
+    _write_summary(label_dir, [["False", "False", "a.tif", "", "", "", ""]])
     records, normalized = load_labels(image_dir, label_dir, _EXTS)
     assert [r.name for r in records] == ["a.tif"]
     assert normalized is False
@@ -282,7 +282,7 @@ def test_ds_store_inside_masks_is_ignored(tmp_path: Path) -> None:
     image_dir = tmp_path / "images"
     _make_images(image_dir, ["a.tif"], size=(2, 2))
     label_dir = tmp_path / "labels"
-    _write_summary(label_dir, [["False", "False", "a.tif", "", "", ""]])
+    _write_summary(label_dir, [["False", "False", "a.tif", "", "", "", ""]])
     (label_dir / MASKS_DIR / ".DS_Store").write_bytes(b"finder junk")
     records, _ = load_labels(image_dir, label_dir, _EXTS)
     assert [r.name for r in records] == ["a.tif"]
@@ -295,7 +295,7 @@ def test_pin_without_metrics_loads_unpinned_and_normalized(tmp_path: Path) -> No
     image_dir = tmp_path / "images"
     _make_images(image_dir, ["a.tif"], size=(2, 2))
     label_dir = tmp_path / "labels"
-    _write_summary(label_dir, [["True", "True", "a.tif", "", "", ""]])  # pinned but unmeasured
+    _write_summary(label_dir, [["True", "True", "a.tif", "", "", "", ""]])  # pinned but unmeasured
     records, normalized = load_labels(image_dir, label_dir, _EXTS)
     assert normalized is True
     assert records[0].pinned is False
@@ -305,7 +305,7 @@ def test_pin_forces_use_and_normalized(tmp_path: Path) -> None:
     image_dir = tmp_path / "images"
     _make_images(image_dir, ["a.tif"], size=(2, 2))
     label_dir = tmp_path / "labels"
-    _write_summary(label_dir, [["True", "False", "a.tif", "1.0", "2.0", "3.0"]])
+    _write_summary(label_dir, [["True", "False", "a.tif", "4.0", "1.0", "2.0", "3.0"]])
     _write_image(label_dir / MASKS_DIR / mask_filename("a.tif"), size=(2, 2))
     records, normalized = load_labels(image_dir, label_dir, _EXTS)
     assert normalized is True
@@ -317,7 +317,7 @@ def test_more_than_three_pins_are_capped(tmp_path: Path) -> None:
     names = [f"{i}.tif" for i in range(4)]
     _make_images(image_dir, names, size=(2, 2))
     label_dir = tmp_path / "labels"
-    _write_summary(label_dir, [["True", "True", name, "1.0", "2.0", "3.0"] for name in names])
+    _write_summary(label_dir, [["True", "True", name, "4.0", "1.0", "2.0", "3.0"] for name in names])
     for name in names:
         _write_image(label_dir / MASKS_DIR / mask_filename(name), size=(2, 2))
     records, normalized = load_labels(image_dir, label_dir, _EXTS)
@@ -349,7 +349,7 @@ def test_is_overwritable_rejects_extra_root_file(tmp_path: Path) -> None:
 def test_is_overwritable_rejects_missing_masks(tmp_path: Path) -> None:
     label_dir = tmp_path / "labels"
     label_dir.mkdir()
-    (label_dir / SUMMARY_CSV).write_text("Pin,Use,Name,Density,Area,Perimeter\n")
+    (label_dir / SUMMARY_CSV).write_text("Pin,Use,Name,Count,Density,Area,Perimeter\n")
     assert is_overwritable_label_dir(label_dir) is False
 
 

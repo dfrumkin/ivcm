@@ -251,7 +251,7 @@ class SummaryPanel(QWidget):
     def refresh(self, records: list[ImageRecord]) -> None:
         """Recompute the summary from ``records`` and repaint the panel."""
         summary = selection_summary(records, bins=_BINS)
-        self._count.setText(f"Count: {summary.count}")
+        self._count.setText(f"Nerve Images: {summary.count}")
         self._rows.setVisible(summary.count > 0)
         self._placeholder.setVisible(summary.count == 0)
         for key, metric in summary.metrics.items():

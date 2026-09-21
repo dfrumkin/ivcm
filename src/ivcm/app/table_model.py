@@ -9,12 +9,13 @@ from PySide6.QtCore import QAbstractTableModel, QModelIndex, QPersistentModelInd
 
 from ivcm.app.records import MAX_PINNED, ImageRecord, pinned_count
 
-# Column layout: two checkboxes ("Pin", "Use"), name, then the three metrics.
-_COLUMNS = ("Pin", "Use", "Name", "Density", "Area", "Perimeter")
-_METRIC_KEYS = {3: "density", 4: "area", 5: "perimeter"}
+# Column layout: two checkboxes ("Pin", "Use"), name, then the four metrics.
+_COLUMNS = ("Pin", "Use", "Name", "Count", "Density", "Area", "Perimeter")
+_METRIC_KEYS = {3: "count", 4: "density", 5: "area", 6: "perimeter"}
 _PIN_COLUMN = 0
 _USE_COLUMN = 1
 _NAME_COLUMN = 2
+_COUNT_COLUMN = 3
 
 _Index = QModelIndex | QPersistentModelIndex
 _NO_PARENT = QModelIndex()  # module-level singleton: a function-call default would trip ruff B008
@@ -84,7 +85,8 @@ class ResultsTableModel(QAbstractTableModel):
             if column == _NAME_COLUMN:
                 return record.name
             if record.is_nerve and record.metrics is not None:
-                return f"{record.metrics[_METRIC_KEYS[column]]:.2f}"
+                value = record.metrics[_METRIC_KEYS[column]]
+                return f"{value:.0f}" if column == _COUNT_COLUMN else f"{value:.2f}"
             return ""
         return None
 

@@ -48,23 +48,29 @@ def _rec(
     area: float | None = None,
     perimeter: float | None = None,
     pinned: bool = False,
+    count: float | None = None,
 ) -> ImageRecord:
     metrics = None
     if density is not None:
-        metrics = {"density": density, "area": area or 0.0, "perimeter": perimeter or 0.0}
+        metrics = {
+            "count": density if count is None else count,
+            "density": density,
+            "area": area or 0.0,
+            "perimeter": perimeter or 0.0,
+        }
     return ImageRecord(path=Path(name), is_nerve=is_nerve, pinned=pinned, metrics=metrics)
 
 
 def test_sort_key_orders_nerve_first_then_metrics_then_name() -> None:
-    a = _rec("a.tif", True, density=5, area=1, perimeter=1)
-    b = _rec("b.tif", True, density=10, area=1, perimeter=1)
-    e = _rec("e.tif", True, density=10, area=2, perimeter=1)  # higher area breaks the density tie
+    a = _rec("a.tif", True, density=1, area=1, perimeter=1, count=5)
+    b = _rec("b.tif", True, density=1, area=1, perimeter=1, count=10)
+    e = _rec("e.tif", True, density=1, area=2, perimeter=1, count=10)  # higher area breaks the count tie
     c = _rec("c.tif", False)
     d = _rec("d.tif", False)
 
     order = [r.name for r in sorted_records([a, b, c, d, e])]
 
-    # nerve rows first (by density desc, area desc as tiebreak), then unchecked rows by name.
+    # nerve rows first (by count desc, area desc as tiebreak), then unchecked rows by name.
     assert order == ["e.tif", "b.tif", "a.tif", "c.tif", "d.tif"]
 
 
@@ -81,14 +87,14 @@ def test_sort_key_unchecked_rows_order_by_name_below_nerve() -> None:
 def test_sort_key_pinned_rows_float_above_unpinned_used_rows() -> None:
     # A pinned row with weak metrics still sorts above a higher-metric unpinned used row; the
     # pinned group orders internally by the metric key, and unchecked rows stay last.
-    strong = _rec("strong.tif", True, density=100, area=1, perimeter=1)
-    pin_low = _rec("plow.tif", True, density=1, area=1, perimeter=1, pinned=True)
-    pin_high = _rec("phigh.tif", True, density=5, area=1, perimeter=1, pinned=True)
+    strong = _rec("strong.tif", True, density=1, area=1, perimeter=1, count=100)
+    pin_low = _rec("plow.tif", True, density=1, area=1, perimeter=1, pinned=True, count=1)
+    pin_high = _rec("phigh.tif", True, density=1, area=1, perimeter=1, pinned=True, count=5)
     unchecked = _rec("u.tif", False)
 
     order = [r.name for r in sorted_records([strong, pin_low, pin_high, unchecked])]
 
-    # Pinned first (by density desc within the group), then the unpinned used row, then unchecked.
+    # Pinned first (by count desc within the group), then the unpinned used row, then unchecked.
     assert order == ["phigh.tif", "plow.tif", "strong.tif", "u.tif"]
 
 
@@ -106,18 +112,18 @@ def test_pinned_count_counts_pinned_records() -> None:
 def test_top3_lists_pinned_first_and_stays_capped_at_three() -> None:
     # Five used-and-measured rows; the weakest is pinned, so it leads the top-3 despite its metrics,
     # displacing what would otherwise be the third row — still only three are returned.
-    recs = [_rec(f"{i}.tif", True, density=float(i), area=1, perimeter=1) for i in range(5)]
-    recs[0].pinned = True  # density 0, the weakest
+    recs = [_rec(f"{i}.tif", True, density=1, area=1, perimeter=1, count=float(i)) for i in range(5)]
+    recs[0].pinned = True  # count 0, the weakest
 
     names = [r.name for r in top3(recs)]
 
-    assert names == ["0.tif", "4.tif", "3.tif"]  # pinned first, then highest-density unpinned
+    assert names == ["0.tif", "4.tif", "3.tif"]  # pinned first, then highest-count unpinned
     assert len(names) == MAX_PINNED
 
 
 def test_top3_returns_first_three_checked_with_metrics_and_updates() -> None:
-    recs = [_rec(f"{i}.tif", True, density=float(i), area=1, perimeter=1) for i in range(5)]
-    # density descending => names 4,3,2,1,0; top-3 is 4,3,2.
+    recs = [_rec(f"{i}.tif", True, density=1, area=1, perimeter=1, count=float(i)) for i in range(5)]
+    # count descending => names 4,3,2,1,0; top-3 is 4,3,2.
     assert [r.name for r in top3(recs)] == ["4.tif", "3.tif", "2.tif"]
 
     recs[4].is_nerve = False  # uncheck the current top -> top-3 shifts down
@@ -187,16 +193,21 @@ def test_selection_summary_covers_only_checked_measured_records() -> None:
     assert summary.metrics["perimeter"].maximum == 300.0
 
 
-def test_selection_summary_statistics_across_all_three_metrics() -> None:
+def test_selection_summary_statistics_across_all_four_metrics() -> None:
     records = [
-        _rec("a.tif", True, density=2, area=10, perimeter=100),
-        _rec("b.tif", True, density=4, area=20, perimeter=200),
-        _rec("c.tif", True, density=6, area=60, perimeter=300),
+        _rec("a.tif", True, density=2, area=10, perimeter=100, count=20),
+        _rec("b.tif", True, density=4, area=20, perimeter=200, count=40),
+        _rec("c.tif", True, density=6, area=60, perimeter=300, count=60),
     ]
 
     summary = selection_summary(records, bins=4)
 
     assert summary.count == 3
+    count = summary.metrics["count"]
+    assert count.mean == 40.0
+    assert count.sd == 20.0  # sample SD (ddof=1) of 20, 40, 60
+    assert (count.minimum, count.maximum) == (20.0, 60.0)
+
     density = summary.metrics["density"]
     assert density.mean == 4.0
     assert density.sd == 2.0  # sample SD (ddof=1) of 2, 4, 6

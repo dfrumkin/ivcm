@@ -297,7 +297,8 @@ class InferenceEngine:
         return [self._segment_tensor(t.unsqueeze(0).to(self.device)) for t in tensors]
 
     def morphometry(self, mask: np.ndarray) -> dict[str, float]:
-        """Density / area / perimeter for a mask, in physical units from the configured parameters."""
+        """Count / density / average area / average perimeter for a mask, in physical units from
+        the configured parameters."""
         return cell_morphometry(
             mask,
             sigma=self.config.sigma,

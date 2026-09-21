@@ -1,18 +1,22 @@
 """Dendritic-cell (DC) morphometry from a binary segmentation mask.
 
-Three measures, reported in the conventional clinical units. ``physical_image_size`` is the
+Four measures, reported in the conventional clinical units. ``physical_image_size`` is the
 physical side length of the (square) input image **in micrometres** (default ``400`` -- the 400 µm
 field of the Heidelberg HRT / Rostock Cornea Module used to acquire these IVCM images). With
 ``S = physical_image_size`` (µm) and the pixel resolution ``R = mask.shape[0]`` (masks are square,
 so ``R == mask.shape[1]``) giving a per-pixel scale ``scale = S / R`` (µm/pixel):
 
-- **density** — DCs per image / ``(S / 1000)**2`` = **DCs per mm²** (the count times a constant, as
+- **count** — DCs per image (surviving 8-connected components, after ``min_size`` filtering);
+- **density** — ``count / (S / 1000)**2`` = **DCs per mm²** (the count times a constant, as
   the source protocol defines it; ``S / 1000`` is the side length in mm);
-- **area** — total DC surface per image, ``raw_px2 * scale**2`` (**µm²**);
-- **perimeter** — total DC outline length per image, ``raw_px * scale`` (**µm**).
+- **area** — average DC surface per image, ``raw_px2 * scale**2 / count`` (**µm²**);
+- **perimeter** — average DC outline length per image, ``raw_px * scale / count`` (**µm**).
 
 Density is reported per mm² but area/perimeter per µm² / µm -- the two length units differ because
-that is the clinical convention, so density alone carries the µm→mm conversion.
+that is the clinical convention, so density alone carries the µm→mm conversion. Area and perimeter
+are per-cell averages (the total divided by ``count``, ``0`` when ``count`` is ``0``) rather than
+per-image totals, so they describe a typical cell's size and outline rather than the image's overall
+DC burden (density already covers that).
 
 The raw pixel measurements (``raw_px2``/``raw_px``) are unchanged: the 0/1 pixel grid is a biased
 substrate for area and (especially) perimeter -- the staircased boundary overestimates perimeter
@@ -195,19 +199,22 @@ def cell_perimeter(
 def cell_morphometry(
     mask: np.ndarray, *, sigma: float = 1.0, physical_image_size: float = 400.0, min_size: int = 3
 ) -> dict[str, float]:
-    """All three measures at once: ``{"density", "area", "perimeter"}`` (cells/mm², µm², µm).
+    """All four measures at once: ``{"count", "density", "area", "perimeter"}`` (cells, cells/mm²,
+    µm², µm; area/perimeter are per-cell averages, not per-image totals).
 
     The intended single entry point at inference: cleans/labels the mask once and extracts the
     smoothed contours once for area and perimeter, avoiding redundant work. Density is
     ``count / (physical_image_size / 1000)**2``; area/perimeter scale the raw pixel measurements by
-    ``scale**2`` / ``scale`` where ``scale = physical_image_size / R`` (see the module docstring).
+    ``scale**2`` / ``scale`` where ``scale = physical_image_size / R`` (see the module docstring),
+    then divide by ``count`` (``0.0`` when ``count`` is ``0``, rather than dividing by zero).
     """
     _validate(mask, sigma=sigma, physical_image_size=physical_image_size, min_size=min_size)
     labels, count = _label_components(mask, min_size)
     area, perimeter = _area_perimeter(labels, sigma)
     scale = physical_image_size / mask.shape[0]
     return {
+        "count": float(count),
         "density": count / (physical_image_size / _UM_PER_MM) ** 2,
-        "area": area * scale**2,
-        "perimeter": perimeter * scale,
+        "area": area * scale**2 / count if count else 0.0,
+        "perimeter": perimeter * scale / count if count else 0.0,
     }

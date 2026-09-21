@@ -154,20 +154,20 @@ class MainWindow(QMainWindow):
         self.table.setColumnWidth(0, _PIN_WIDTH)
         self.table.setColumnWidth(1, _USE_WIDTH)
         self.table.setColumnWidth(2, _NAME_WIDTH)
-        for column in (3, 4, 5):
+        for column in (3, 4, 5, 6):
             self.table.setColumnWidth(column, _METRIC_WIDTH)
         # Names longer than the column are ellided rather than widening the table.
         header.setSectionResizeMode(2, QHeaderView.ResizeMode.Interactive)
 
     def _table_width_budget(self) -> int:
-        """Width that shows all six columns with no h-scrollbar: columns plus the table's chrome.
+        """Width that shows all seven columns with no h-scrollbar: columns plus the table's chrome.
 
         Budgets the sum of column widths, the table frame, the vertical header, and a
         vertical-scrollbar-width allowance (so columns still fit once enough rows show a vertical
         scrollbar). The table is fixed to this width so it neither grows into (nor is squeezed
         below) its column budget as the window resizes.
         """
-        columns = _PIN_WIDTH + _USE_WIDTH + _NAME_WIDTH + 3 * _METRIC_WIDTH
+        columns = _PIN_WIDTH + _USE_WIDTH + _NAME_WIDTH + 4 * _METRIC_WIDTH
         frame = 2 * self.table.frameWidth()
         vheader = self.table.verticalHeader().sizeHint().width()
         scrollbar = self.style().pixelMetric(self.style().PixelMetric.PM_ScrollBarExtent)

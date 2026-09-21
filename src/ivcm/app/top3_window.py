@@ -113,6 +113,7 @@ class Top3Window(QWidget):
         metrics = record.metrics or {}
         text = (
             f"{record.name}\n"
+            f"count: {metrics.get('count', 0.0):.0f}\n"
             f"density: {metrics.get('density', 0.0):.2f}\n"
             f"area: {metrics.get('area', 0.0):.2f}\n"
             f"perimeter: {metrics.get('perimeter', 0.0):.2f}"

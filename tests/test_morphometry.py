@@ -88,8 +88,9 @@ def test_density_is_count_over_physical_area_and_min_size_filters() -> None:
 
 
 def test_physical_scaling_matches_scale_one_baseline() -> None:
-    """The three measures scale exactly by the physical/pixel ratio: density by ``1/S**2`` and
-    area/perimeter from raw pixels by ``scale**2`` / ``scale`` where ``scale = S / R``."""
+    """Count is unaffected by the physical scale, and the other three measures scale exactly by the
+    physical/pixel ratio: density by ``1/S**2`` and area/perimeter (per-cell averages) from raw
+    pixels by ``scale**2`` / ``scale`` where ``scale = S / R``."""
     mask = _disk(120, 40.0, 60, 60)
     resolution = mask.shape[0]  # R
 
@@ -99,6 +100,7 @@ def test_physical_scaling_matches_scale_one_baseline() -> None:
     scaled = cell_morphometry(mask, sigma=1.0, physical_image_size=size)
     scale = size / resolution
 
+    assert scaled["count"] == baseline["count"] == 1.0
     # density * S**2 == count * 1000**2 on both sides, so the two densities encode the same count.
     assert _close(scaled["density"] * size**2, baseline["density"] * resolution**2, 1e-9)
     assert _close(scaled["area"], baseline["area"] * scale**2, 1e-9)
@@ -106,8 +108,8 @@ def test_physical_scaling_matches_scale_one_baseline() -> None:
 
 
 def test_min_size_applied_consistently_across_metrics() -> None:
-    """A speck below min_size is excluded from density *and* contributes no area/perimeter, so the
-    three measures stay on the same component set."""
+    """A speck below min_size is excluded from density *and* contributes no area/perimeter, so all
+    four measures stay on the same component set."""
     big = _disk(120, 30, 60, 60)
     mask = big.copy()
     mask[5, 5] = 1  # tiny speck
@@ -118,14 +120,16 @@ def test_min_size_applied_consistently_across_metrics() -> None:
     # The surviving big component is processed identically with or without the (removed) speck, so
     # the measures are exactly equal, not merely close. Density is count / (physical_image_size/1000)**2
     # with the default physical_image_size=400 (µm) -> 1 / 0.4**2 cells/mm².
+    assert with_speck["count"] == big_only["count"] == 1.0
     assert with_speck["density"] == big_only["density"] == 1 / (400.0 / 1000) ** 2
     assert with_speck["area"] == big_only["area"]
     assert with_speck["perimeter"] == big_only["perimeter"]
 
 
 def test_close_components_not_bridged() -> None:
-    """Two separated disks count as two and total area/perimeter ≈ twice a single disk's — the
-    per-component smoothing does not merge them."""
+    """Two separated, identically-sized disks count as two, and their average area/perimeter per
+    cell match a single disk's — the per-component smoothing does not merge them, and dividing by
+    the doubled count cancels the doubled total."""
     radius = 15.0
     single = cell_morphometry(_disk(160, radius, 80, 80), sigma=1.0)
 
@@ -136,8 +140,9 @@ def test_close_components_not_bridged() -> None:
     assert cell_density(pair) == 2 / (400.0 / 1000) ** 2
 
     both = cell_morphometry(pair, sigma=1.0)
-    assert _close(both["area"], 2 * single["area"], 0.02)
-    assert _close(both["perimeter"], 2 * single["perimeter"], 0.02)
+    assert both["count"] == 2.0
+    assert _close(both["area"], single["area"], 0.02)
+    assert _close(both["perimeter"], single["perimeter"], 0.02)
 
 
 def test_hole_is_filled() -> None:
@@ -155,10 +160,10 @@ def test_hole_is_filled() -> None:
 
 
 def test_empty_mask_is_zero() -> None:
-    """A mask with no foreground yields zero for all three measures."""
+    """A mask with no foreground yields zero for all four measures (no divide-by-zero on count)."""
     empty = np.zeros((40, 40), dtype=np.uint8)
     result = cell_morphometry(empty)
-    assert result == {"density": 0.0, "area": 0.0, "perimeter": 0.0}
+    assert result == {"count": 0.0, "density": 0.0, "area": 0.0, "perimeter": 0.0}
 
 
 def test_edge_touching_object_is_measured() -> None:

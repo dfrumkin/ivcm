@@ -185,7 +185,7 @@ class _FakeEngine:
     def morphometry(self, mask: np.ndarray) -> dict[str, float]:
         if _code(mask) == _MORPH_FAIL:
             raise RuntimeError("morphometry failed")
-        return {"density": 1.0, "area": 2.0, "perimeter": 3.0}
+        return {"count": 1.0, "density": 1.0, "area": 2.0, "perimeter": 3.0}
 
 
 def _run(
@@ -212,7 +212,9 @@ def test_process_directory_happy_path_classifies_segments_and_measures() -> None
     assert skipped == [] and seg_failed == []
     nerve = [r for r in records if r.is_nerve]
     assert [r.name for r in nerve] == ["0_ok.tif", "2_ok.tif"]
-    assert all(r.mask is not None and r.metrics == {"density": 1.0, "area": 2.0, "perimeter": 3.0} for r in nerve)
+    assert all(
+        r.mask is not None and r.metrics == {"count": 1.0, "density": 1.0, "area": 2.0, "perimeter": 3.0} for r in nerve
+    )
     plain = next(r for r in records if r.name == "1_plain.tif")
     assert plain.is_nerve is False and plain.mask is None and plain.metrics is None
     assert progress[-1] == len(files)

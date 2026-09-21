@@ -1,8 +1,8 @@
 """Per-metric summary of the selected images (pure, Qt-free, unit-tested).
 
 The selected set is the checked records with computed metrics -- the same eligibility rule
-:func:`ivcm.app.records.top3` uses. For each metric (``density``, ``area``, ``perimeter``) this
-reduces those records to what the summary strips draw: the mean, the sample standard deviation,
+:func:`ivcm.app.records.top3` uses. For each metric (``count``, ``density``, ``area``, ``perimeter``)
+this reduces those records to what the summary strips draw: the mean, the sample standard deviation,
 the min/max, and a histogram of the values over the ``[0, max]`` axis.
 
 Statistics that are not measurable are ``None`` rather than a sentinel number, so the drawing code
@@ -18,7 +18,7 @@ import numpy as np
 
 from ivcm.app.records import ImageRecord
 
-METRIC_KEYS = ("density", "area", "perimeter")
+METRIC_KEYS = ("count", "density", "area", "perimeter")
 
 
 @dataclass(frozen=True)

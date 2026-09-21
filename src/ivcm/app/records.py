@@ -23,7 +23,7 @@ class ImageRecord:
     top; at most :data:`MAX_PINNED` rows may be pinned. ``mask`` and ``metrics`` are filled lazily
     by segmentation and cached, so they persist even after the row is unchecked (the overlay still
     shows in the preview/large view). ``metrics`` holds the ``cell_morphometry`` output
-    (``{"density", "area", "perimeter"}``) once computed.
+    (``{"count", "density", "area", "perimeter"}``) once computed.
     """
 
     path: Path
@@ -46,20 +46,20 @@ def sort_key(record: ImageRecord) -> tuple[int, int, float, float, float, str]:
     """Fixed (non-user-changeable) order.
 
     Pinned rows come first; within each pin group, checked (nerve) rows come before unchecked rows;
-    within the checked group, by density, then area, then perimeter (all descending — most
+    within the checked group, by count, then area, then perimeter (all descending — most
     prominent first), then name. Unchecked rows have their metrics treated as absent and order by
     name only, always below checked rows. Since a pinned row is always used and measured, the pin
     tier simply floats those rows above the other used rows. The key is total, so the sort is
     well-defined regardless of cached metrics on unchecked rows.
     """
     metrics = record.metrics if record.is_nerve and record.metrics is not None else None
-    density = metrics["density"] if metrics is not None else 0.0
+    count = metrics["count"] if metrics is not None else 0.0
     area = metrics["area"] if metrics is not None else 0.0
     perimeter = metrics["perimeter"] if metrics is not None else 0.0
     return (
         0 if record.pinned else 1,
         0 if record.is_nerve else 1,
-        -density,
+        -count,
         -area,
         -perimeter,
         record.name.lower(),
