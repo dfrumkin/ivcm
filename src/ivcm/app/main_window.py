@@ -1,4 +1,4 @@
-"""Main window: directory batch, results table, side preview, and the synced top-3 window."""
+"""Main window: directory batch, results table, side preview, and the synced sample window."""
 
 from __future__ import annotations
 
@@ -41,11 +41,18 @@ from ivcm.app.inference import InferenceEngine, load_image
 from ivcm.app.mask_slider import alpha_from_slider, make_mask_slider, slider_from_alpha
 from ivcm.app.overlay_dialog import OverlayDialog
 from ivcm.app.preview import PREVIEW_MAX, EditablePreview
-from ivcm.app.records import MAX_PINNED, ImageRecord, pinned_count, selection_after_toggle, sort_key, top3
+from ivcm.app.records import (
+    ImageRecord,
+    initial_pins,
+    pinned_display,
+    replacement_for,
+    selection_after_toggle,
+    sort_key,
+)
+from ivcm.app.sample_window import SampleWindow
 from ivcm.app.save_dialog import SaveDirectoryDialog
 from ivcm.app.summary_panel import SummaryPanel
 from ivcm.app.table_model import ResultsTableModel
-from ivcm.app.top3_window import Top3Window
 from ivcm.data import NonSquareImageError
 
 log = logging.getLogger(__name__)
@@ -71,7 +78,7 @@ class MainWindow(QMainWindow):
 
     def __init__(self, engine: InferenceEngine) -> None:
         super().__init__()
-        self.setWindowTitle("ivcm — clinical review")
+        self.setWindowTitle("IVCM")
         self.engine = engine
         self.records: list[ImageRecord] = []
 
@@ -83,6 +90,9 @@ class MainWindow(QMainWindow):
         self._loaded_label_dir: Path | None = None
         self._save_target: Path | None = None
         self._dirty = False
+        # Every image pinned since the current dataset was created/loaded (in memory only): such an
+        # image is never picked as an automatic sample-window replacement.
+        self._ever_pinned: set[ImageRecord] = set()
 
         # Mask-editing state (see the "editing mode" methods). The preview widget owns the working
         # mask while editing; the main window holds only the surrounding session state.
@@ -111,7 +121,7 @@ class MainWindow(QMainWindow):
         self.preview.stroke_committed.connect(self._on_stroke_committed)
 
         # Mask slider beneath the preview; controls only this window's preview (independent of
-        # the top-3 window's slider). It doubles as the "blender" during an edit.
+        # the sample window's slider). It doubles as the "blender" during an edit.
         self.mask_slider = make_mask_slider(engine.config, self._on_mask_alpha_changed)
 
         # Summary of the checked images, above the preview; its height is fixed by its own rows,
@@ -134,11 +144,10 @@ class MainWindow(QMainWindow):
         layout.addWidget(right_pane, 1)  # horizontal slack flows to the right pane, enlarging the preview
         self.setCentralWidget(central)
 
-        self.top3_window = Top3Window(engine.config)
-        self.top3_window.pin_requested.connect(self._on_pin_from_top3)
-        self.top3_window.unpin_requested.connect(self._on_unpin_from_top3)
-        self.top3_window.dont_use_requested.connect(self._on_dont_use_from_top3)
-        self.top3_window.save_requested.connect(self._on_save_shortcut)
+        self.sample_window = SampleWindow(engine.config)
+        self.sample_window.unpin_requested.connect(self._on_unpin_from_sample)
+        self.sample_window.dont_use_requested.connect(self._on_dont_use_from_sample)
+        self.sample_window.save_requested.connect(self._on_save_shortcut)
 
         self._build_toolbar()
         self._update_preview()  # nothing selected yet: placeholder, Edit + blender disabled
@@ -215,11 +224,11 @@ class MainWindow(QMainWindow):
         self._save_action.triggered.connect(self._on_save)
         toolbar.addAction(self._save_action)
 
-        # "Top 3" opens the synced window; disabled until there is data to show.
-        self._top3_action = QAction("Top 3", self)
-        self._top3_action.setEnabled(False)
-        self._top3_action.triggered.connect(self._show_top3)
-        toolbar.addAction(self._top3_action)
+        # "Sample" opens the synced window; disabled until there is data to show.
+        self._sample_action = QAction("Sample", self)
+        self._sample_action.setEnabled(False)
+        self._sample_action.triggered.connect(self._show_sample)
+        toolbar.addAction(self._sample_action)
 
         # Route Quit through the window's close (and thus the unsaved-changes guard); a direct
         # QApplication.quit() exits the event loop without delivering a close event.
@@ -333,10 +342,10 @@ class MainWindow(QMainWindow):
         return line
 
     def closeEvent(self, event: QCloseEvent) -> None:
-        # Guard against losing unsaved changes on close (window-X or Quit). The top-3 window is
+        # Guard against losing unsaved changes on close (window-X or Quit). The sample window is
         # closed only on a path that actually exits, so a Cancel leaves the app exactly as it was.
         if self._resolve_unsaved_changes():
-            self.top3_window.close()
+            self.sample_window.close()
             super().closeEvent(event)
         else:
             event.ignore()
@@ -502,11 +511,23 @@ class MainWindow(QMainWindow):
             self._mark_dataset_state(image_dir, loaded_label_dir=None, dirty=True)
 
     def _apply_loaded(self, records: list[ImageRecord], image_dir: Path, label_dir: Path, normalized: bool) -> None:
-        """Apply a loaded label directory: install the records and record the dataset state."""
+        """Apply a loaded label directory: install the records and record the dataset state.
+
+        Saved pins are kept; only labels with no pins at all get the initial pins (an unsaved change).
+        """
         self.records[:] = records
+        self._ever_pinned = set()
+        pins_added = not any(r.pinned for r in records) and self._apply_initial_pins()
         self._resort_and_refresh(lambda _recs: None)  # loaded dataset: leave no selection
-        self._show_top3()
-        self._mark_dataset_state(image_dir, loaded_label_dir=label_dir, dirty=normalized)
+        self._show_sample()
+        self._mark_dataset_state(image_dir, loaded_label_dir=label_dir, dirty=normalized or pins_added)
+
+    def _apply_initial_pins(self) -> bool:
+        """Pin the images nearest mean−SD / mean / mean+SD count; ``True`` if any were pinned."""
+        picks = initial_pins(self.records)
+        for record in picks:
+            record.pinned = True
+        return bool(picks)
 
     def _mark_dataset_state(self, image_dir: Path, loaded_label_dir: Path | None, dirty: bool) -> None:
         """Record the dataset session state shared by Create and Load, and enable Save."""
@@ -516,7 +537,7 @@ class MainWindow(QMainWindow):
         self._dirty = dirty
         self._set_load_highlight(False)
         self._save_action.setEnabled(True)
-        self._top3_action.setEnabled(True)
+        self._sample_action.setEnabled(True)
         # The status strip reflects the current dataset's save state; a freshly loaded/created
         # dataset has not been saved this session, so clear any prior save message.
         self.statusBar().clearMessage()
@@ -547,13 +568,13 @@ class MainWindow(QMainWindow):
         self.records.clear()
         self.table.setCurrentIndex(QModelIndex())
         self.model.refresh()
-        self.top3_window.refresh([])
+        self.sample_window.refresh([])
         self.summary_panel.refresh([])
 
         progress = QProgressDialog("Processing images…", "", 0, len(files), self)
         progress.setCancelButton(None)  # uncancellable: the batch always runs to completion
         # Application-modal (not window-modal): setValue pumps events during the batch, and the
-        # top-3 window has no parent — only application modality blocks its Unpin / Don't Use clicks
+        # sample window has no parent — only application modality blocks its Unpin / Don't Use clicks
         # from mutating self.records mid-build.
         progress.setWindowModality(Qt.WindowModality.ApplicationModal)
         progress.setMinimumDuration(0)
@@ -573,8 +594,10 @@ class MainWindow(QMainWindow):
         progress.setValue(len(files))  # also covers the empty-directory case (no chunks)
 
         self.records[:] = records
+        self._ever_pinned = set()
+        self._apply_initial_pins()
         self._resort_and_refresh(lambda _recs: None)  # fresh batch: leave no selection
-        self._show_top3()
+        self._show_sample()
 
         # The status strip is reserved for the current dataset's save state, so batch problems are
         # surfaced in a dialog (only when there are any) rather than left in the strip.
@@ -590,7 +613,7 @@ class MainWindow(QMainWindow):
     # --- save ------------------------------------------------------------
 
     def _on_save_shortcut(self) -> None:
-        """The save shortcut fired in the top-3 window; save only when the Save action is enabled.
+        """The save shortcut fired in the sample window; save only when the Save action is enabled.
 
         Mirrors the main window's Save action gating (no data loaded, or an edit in progress), which
         a shortcut on a separate window would otherwise bypass.
@@ -685,7 +708,7 @@ class MainWindow(QMainWindow):
         box.setStandardButtons(QMessageBox.StandardButton.Ok)
         box.exec()
 
-    # --- checkbox / top-3 ------------------------------------------------
+    # --- checkbox / sample window -----------------------------------------
 
     def _ensure_segmented(self, record: ImageRecord) -> bool:
         """Segment ``record`` (and compute its metrics) if not already done; ``False`` on failure.
@@ -726,8 +749,8 @@ class MainWindow(QMainWindow):
         """Pin changed: on a successful pin the record is used and measured; re-sort and refresh.
 
         Pinning forces Use (already set by the model), so segment if needed; a failure reverts both
-        Pin and Use. A successful pin follows the record to the top; an unpin (or a failed pin)
-        keeps the prior row position.
+        Pin and Use. A successful pin follows the record to its sorted position; an unpin (or a
+        failed pin) keeps the prior row position. Unpinning here never pins a replacement.
         """
         prior_row = self.table.currentIndex().row()
         if now_checked and not self._ensure_segmented(record):
@@ -750,43 +773,38 @@ class MainWindow(QMainWindow):
         box.setIconPixmap(self.style().standardIcon(QStyle.StandardPixmap.SP_MessageBoxWarning).pixmap(64, 64))
         box.exec()
 
-    def _on_pin_from_top3(self, record: ImageRecord) -> None:
-        """ "Pin" in the top-3 window is exactly checking Pin in the table (subject to the limit).
+    def _on_unpin_from_sample(self, record: ImageRecord) -> None:
+        """ "Unpin" in the sample window: unpin, then pin a replacement into the vacated tile."""
+        self._remove_from_sample(record, dont_use=False)
 
-        Enforces the three-pin cap (warning instead of pinning a fourth), forces Use and segments if
-        needed, then follows the record to its new top position.
+    def _on_dont_use_from_sample(self, record: ImageRecord) -> None:
+        """ "Don't Use" in the sample window: uncheck Use (and Pin), then pin a replacement."""
+        self._remove_from_sample(record, dont_use=True)
+
+    def _remove_from_sample(self, record: ImageRecord, *, dont_use: bool) -> None:
+        """Unpin ``record`` (and uncheck Use if ``dont_use``), then refill its tile.
+
+        The replacement is the selected image, never pinned this session, whose count is closest to
+        the vacated tile's target (left mean−SD, center mean, right mean+SD), with the targets taken
+        after the change. The table keeps its prior row position.
         """
-        if not record.pinned and pinned_count(self.records) >= MAX_PINNED:
-            self._on_pin_rejected()
+        if not record.pinned:
             return
         self._mark_dirty()
         prior_row = self.table.currentIndex().row()
-        record.pinned = True
-        record.is_nerve = True  # pinning forces "use"
-        if not self._ensure_segmented(record):
-            record.pinned = False
+        slot = pinned_display(self.records).index(record)
+        record.pinned = False
+        if dont_use:
             record.is_nerve = False
-        self._resort_and_refresh(lambda recs: selection_after_toggle(recs, record, record.pinned, prior_row))
-
-    def _on_unpin_from_top3(self, record: ImageRecord) -> None:
-        """ "Unpin" in the top-3 window is exactly unchecking Pin in the table (keeps row position)."""
-        self._mark_dirty()
-        prior_row = self.table.currentIndex().row()
-        record.pinned = False
+        replacement = replacement_for(self.records, slot, self._ever_pinned)
+        if replacement is not None:
+            replacement.pinned = True  # already used and measured, so no segmentation needed
         self._resort_and_refresh(lambda recs: selection_after_toggle(recs, record, False, prior_row))
 
-    def _on_dont_use_from_top3(self, record: ImageRecord) -> None:
-        """ "Don't Use" is exactly unchecking Use in the table (also unpins; keeps row position)."""
-        self._mark_dirty()
-        prior_row = self.table.currentIndex().row()
-        record.is_nerve = False
-        record.pinned = False
-        self._resort_and_refresh(lambda recs: selection_after_toggle(recs, record, False, prior_row))
-
-    def _show_top3(self) -> None:
-        self.top3_window.refresh(top3(self.records))
-        self.top3_window.show()
-        self.top3_window.raise_()
+    def _show_sample(self) -> None:
+        self.sample_window.refresh(pinned_display(self.records))
+        self.sample_window.show()
+        self.sample_window.raise_()
 
     # --- refresh / preview ----------------------------------------------
 
@@ -794,12 +812,14 @@ class MainWindow(QMainWindow):
         """Re-sort the records, rebuild the views, and select the row ``select`` returns.
 
         ``select`` is called with the freshly sorted record list and returns the row to select,
-        or ``None`` for no selection.
+        or ``None`` for no selection. Every currently pinned record joins the session's ever-pinned
+        set here, which covers all the ways a record gets pinned.
         """
         self.records.sort(key=sort_key)
+        self._ever_pinned.update(r for r in self.records if r.pinned)
         target = select(self.records)
         self.model.refresh()
-        self.top3_window.refresh(top3(self.records))
+        self.sample_window.refresh(pinned_display(self.records))
         self.summary_panel.refresh(self.records)
         self._apply_selection(target)
         self._update_preview()
@@ -870,7 +890,7 @@ class MainWindow(QMainWindow):
         """Grey out (or restore) everything but the preview, blender, and edit toolbar."""
         self.table.setEnabled(not frozen)
         self.toolbar.setEnabled(not frozen)
-        self.top3_window.setEnabled(not frozen)
+        self.sample_window.setEnabled(not frozen)
         # Disable the Save action itself (not just its toolbar button) so the Cmd+S shortcut is
         # inert during an edit; editing is only reachable once a dataset is loaded, so re-enabling
         # on unfreeze is always correct.

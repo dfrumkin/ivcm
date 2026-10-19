@@ -29,13 +29,14 @@ from ivcm.app.inference import (
     strip_criterion_state,
 )
 from ivcm.app.records import (
-    MAX_PINNED,
     ImageRecord,
+    initial_pins,
     pinned_count,
+    pinned_display,
+    replacement_for,
     selection_after_toggle,
     sort_key,
     sorted_records,
-    top3,
 )
 from ivcm.app.render import overlay
 from ivcm.app.summary import selection_summary
@@ -84,18 +85,16 @@ def test_sort_key_unchecked_rows_order_by_name_below_nerve() -> None:
     assert order == ["z.tif", "x.tif", "y.tif"]
 
 
-def test_sort_key_pinned_rows_float_above_unpinned_used_rows() -> None:
-    # A pinned row with weak metrics still sorts above a higher-metric unpinned used row; the
-    # pinned group orders internally by the metric key, and unchecked rows stay last.
+def test_sort_key_ignores_pins() -> None:
+    # A pinned row with a low count sorts by (use, count, ...) like any other used row.
     strong = _rec("strong.tif", True, density=1, area=1, perimeter=1, count=100)
     pin_low = _rec("plow.tif", True, density=1, area=1, perimeter=1, pinned=True, count=1)
     pin_high = _rec("phigh.tif", True, density=1, area=1, perimeter=1, pinned=True, count=5)
     unchecked = _rec("u.tif", False)
 
-    order = [r.name for r in sorted_records([strong, pin_low, pin_high, unchecked])]
+    order = [r.name for r in sorted_records([unchecked, pin_low, strong, pin_high])]
 
-    # Pinned first (by count desc within the group), then the unpinned used row, then unchecked.
-    assert order == ["phigh.tif", "plow.tif", "strong.tif", "u.tif"]
+    assert order == ["strong.tif", "phigh.tif", "plow.tif", "u.tif"]
 
 
 def test_pinned_count_counts_pinned_records() -> None:
@@ -109,33 +108,63 @@ def test_pinned_count_counts_pinned_records() -> None:
     assert pinned_count([]) == 0
 
 
-def test_top3_lists_pinned_first_and_stays_capped_at_three() -> None:
-    # Five used-and-measured rows; the weakest is pinned, so it leads the top-3 despite its metrics,
-    # displacing what would otherwise be the third row — still only three are returned.
-    recs = [_rec(f"{i}.tif", True, density=1, area=1, perimeter=1, count=float(i)) for i in range(5)]
-    recs[0].pinned = True  # count 0, the weakest
-
-    names = [r.name for r in top3(recs)]
-
-    assert names == ["0.tif", "4.tif", "3.tif"]  # pinned first, then highest-count unpinned
-    assert len(names) == MAX_PINNED
+def _counted(counts: list[float]) -> list[ImageRecord]:
+    """Used, measured records named ``c<count>.tif`` with the given counts."""
+    return [_rec(f"c{c:g}.tif", True, density=1, area=1, perimeter=1, count=c) for c in counts]
 
 
-def test_top3_returns_first_three_checked_with_metrics_and_updates() -> None:
-    recs = [_rec(f"{i}.tif", True, density=1, area=1, perimeter=1, count=float(i)) for i in range(5)]
-    # count descending => names 4,3,2,1,0; top-3 is 4,3,2.
-    assert [r.name for r in top3(recs)] == ["4.tif", "3.tif", "2.tif"]
+def test_pinned_display_shows_only_pinned_by_count_ascending() -> None:
+    recs = _counted([5, 1, 9, 3])
+    for r in recs[:3]:
+        r.pinned = True  # counts 5, 1, 9; 3 stays unpinned
 
-    recs[4].is_nerve = False  # uncheck the current top -> top-3 shifts down
-    assert [r.name for r in top3(recs)] == ["3.tif", "2.tif", "1.tif"]
+    assert [r.name for r in pinned_display(recs)] == ["c1.tif", "c5.tif", "c9.tif"]
 
 
-def test_top3_excludes_pending_and_unchecked() -> None:
-    measured = _rec("m.tif", True, density=1, area=1, perimeter=1)
-    no_metrics = ImageRecord(path=Path("p.tif"), is_nerve=True, metrics=None)  # checked but unmeasured
-    unchecked = _rec("u.tif", False, density=9, area=9, perimeter=9)
+def test_initial_pins_pick_closest_to_mean_minus_sd_mean_plus_sd() -> None:
+    # counts 0, 2, 4, 6, 8: mean 4, sample SD ~3.16 -> targets ~0.84, 4, ~7.16.
+    recs = _counted([8, 0, 4, 6, 2])
+    recs.append(_rec("unused.tif", False, density=1, area=1, perimeter=1, count=1))  # ignored
+    recs.append(ImageRecord(path=Path("unmeasured.tif"), is_nerve=True))  # ignored
 
-    assert [r.name for r in top3([measured, no_metrics, unchecked])] == ["m.tif"]
+    assert [r.name for r in initial_pins(recs)] == ["c0.tif", "c4.tif", "c8.tif"]
+
+
+def test_initial_pins_are_distinct_and_cover_small_sets() -> None:
+    assert [r.name for r in initial_pins(_counted([7]))] == ["c7.tif"]
+    assert sorted(r.name for r in initial_pins(_counted([1, 2]))) == ["c1.tif", "c2.tif"]
+    assert initial_pins([_rec("u.tif", False)]) == []
+
+
+def test_replacement_uses_the_slot_target() -> None:
+    # counts 0..8 step 2 (mean 4, SD ~3.16); nothing pinned or excluded.
+    recs = _counted([0, 2, 4, 6, 8])
+
+    picks = [replacement_for(recs, slot, set()) for slot in range(3)]
+
+    assert [r.name if r else None for r in picks] == ["c0.tif", "c4.tif", "c8.tif"]
+
+
+def test_replacement_skips_pinned_excluded_unused_and_unmeasured() -> None:
+    recs = _counted([0, 2, 4, 6, 8])
+    by_name = {r.name: r for r in recs}
+    by_name["c4.tif"].pinned = True  # currently pinned
+    excluded = {by_name["c6.tif"]}  # pinned earlier this session
+    recs.append(_rec("unused.tif", False, density=1, area=1, perimeter=1, count=4))
+    recs.append(ImageRecord(path=Path("unmeasured.tif"), is_nerve=True))
+
+    pick = replacement_for(recs, 1, excluded)  # center: mean 4
+
+    assert pick is not None
+    assert pick.name == "c2.tif"  # 4 is pinned and 6 excluded; 2 is the next closest
+
+
+def test_replacement_none_when_nothing_qualifies() -> None:
+    recs = _counted([1, 2])
+    for r in recs:
+        r.pinned = True
+    assert replacement_for(recs, 0, set()) is None
+    assert replacement_for([_rec("u.tif", False)], 0, set()) is None
 
 
 def test_selection_after_toggle_check_follows_record() -> None:
@@ -172,7 +201,7 @@ def test_selection_after_toggle_uncheck_last_row_edge() -> None:
 
 def test_selection_after_toggle_uncheck_no_prior_selection_returns_none() -> None:
     records = [_rec("a.tif", False), _rec("b.tif", False)]
-    # An invalid prior row (e.g. remove-from-top3 with no table selection) -> no selection.
+    # An invalid prior row (e.g. remove-from-sample with no table selection) -> no selection.
     assert selection_after_toggle(records, records[0], now_checked=False, prior_row=-1) is None
 
 

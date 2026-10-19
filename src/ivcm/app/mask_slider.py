@@ -1,4 +1,4 @@
-"""Shared mask-strength slider for the preview and top-3 windows (imports Qt).
+"""Shared mask-strength slider for the preview and sample windows (imports Qt).
 
 A horizontal slider over ``0..100`` mapped to a blend alpha in ``[0, 1]`` (0 = no mask,
 1 = full mask). Both windows build identical, independent sliders via :func:`make_mask_slider`

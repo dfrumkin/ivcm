@@ -1,9 +1,10 @@
 """Per-metric summary of the selected images (pure, Qt-free, unit-tested).
 
-The selected set is the checked records with computed metrics -- the same eligibility rule
-:func:`ivcm.app.records.top3` uses. For each metric (``count``, ``density``, ``area``, ``perimeter``)
-this reduces those records to what the summary strips draw: the mean, the sample standard deviation,
-the min/max, and a histogram of the values over the ``[0, max]`` axis.
+The selected set is the checked records with computed metrics
+(:func:`ivcm.app.records.selected_records`, also the set eligible for pinning). For each metric
+(``count``, ``density``, ``area``, ``perimeter``) this reduces those records to what the summary
+strips draw: the mean, the sample standard deviation, the min/max, and a histogram of the values
+over the ``[0, max]`` axis.
 
 Statistics that are not measurable are ``None`` rather than a sentinel number, so the drawing code
 has one explicit "nothing to draw" case: everything is ``None`` for an empty selection, and ``sd``
@@ -16,7 +17,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from ivcm.app.records import ImageRecord
+from ivcm.app.records import ImageRecord, selected_records
 
 METRIC_KEYS = ("count", "density", "area", "perimeter")
 
@@ -44,11 +45,6 @@ class SelectionSummary:
 
     count: int
     metrics: dict[str, MetricSummary]
-
-
-def selected_records(records: list[ImageRecord]) -> list[ImageRecord]:
-    """The checked records that have computed metrics (the summarised set)."""
-    return [r for r in records if r.is_nerve and r.metrics is not None]
 
 
 def _histogram(values: np.ndarray, maximum: float, bins: int) -> tuple[int, ...]:

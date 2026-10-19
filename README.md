@@ -50,8 +50,15 @@ tests/         # unit, config, and smoke tests; real-data tests skip if no data
 
 A PySide6 app for reviewing a directory of images: it classifies each image, segments the ones
 predicted to be nerves, and shows their morphometry (count, density, area, perimeter) in a
-table. Reviewers can accept/reject each image, pin favorites, and hand-edit masks. A review can
-be saved to and reloaded from a label directory.
+table. Reviewers can accept/reject each image and hand-edit masks. A review can be saved to and
+reloaded from a label directory.
+
+Up to three images are pinned; the pinned images are the ones shown, ordered by cell count, in the
+"Sample Images" window (opened with the "Sample" toolbar button). A fresh review pins
+the images whose counts are closest to the mean − SD, the mean, and the mean + SD. Unpinning an
+image (or marking it "Don't Use") in that window replaces it with the nerve image closest to that tile's target that has not been pinned yet in
+this session. Unpinning in the main table leaves the tile empty, so another image can be pinned
+by hand.
 
 ```bash
 uv run ivcm-ui

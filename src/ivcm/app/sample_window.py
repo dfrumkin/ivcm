@@ -1,4 +1,4 @@
-"""The synced top-3 window: overlays + metrics for the three top checked images."""
+"""The synced sample window: overlays + metrics for the (up to three) pinned images."""
 
 from __future__ import annotations
 
@@ -21,29 +21,25 @@ from ivcm.app.scaling_label import ScalingImageLabel
 _TILE = 320  # minimum side length of each tile's image (tiles grow past this with the window)
 
 
-class Top3Window(QWidget):
-    """Shows the current top-3 records with a per-tile pin toggle and a "Don't Use" button.
+class SampleWindow(QWidget):
+    """Shows the pinned records (left to right by count) with "Unpin" and "Don't Use" buttons.
 
-    The pin toggle reads "Unpin" for a pinned image (asks the main window to unpin it) and "Pin"
-    for an unpinned one (asks it to pin it, exactly like checking Pin in the main table — subject to
-    the three-pin limit). "Don't Use" asks the main window to uncheck Use (which also unpins). Each
-    mirrors the corresponding action in the main table; the button re-renders on the next
-    :meth:`refresh`, so pinning flips it to "Unpin".
+    Every tile is pinned. "Unpin" asks the main window to unpin the image and "Don't Use" to uncheck
+    Use (which also unpins); in both cases the main window pins a replacement for that tile.
 
-    The main window calls :meth:`refresh` with the current top-3 on every change, so the two
+    The main window calls :meth:`refresh` with the pinned records on every change, so the two
     windows stay in sync. The window remembers the last records it was given and its own mask
     slider value so a slider change can re-render the tiles locally (independent of the main
     window's slider).
     """
 
-    pin_requested = Signal(object)  # emits the ImageRecord to pin
     unpin_requested = Signal(object)  # emits the ImageRecord to unpin
     dont_use_requested = Signal(object)  # emits the ImageRecord to uncheck (Use, and Pin if set)
     save_requested = Signal()  # the save shortcut (Cmd+S) was pressed while this window had focus
 
     def __init__(self, config: AppConfig) -> None:
         super().__init__()
-        self.setWindowTitle("Top 3 Nerve Images")
+        self.setWindowTitle("Sample Images")
         self._config = config
         self._records: list[ImageRecord] = []
 
@@ -58,11 +54,11 @@ class Top3Window(QWidget):
         self._slider = make_mask_slider(config, self._on_alpha_changed)
         layout.addWidget(self._slider, alignment=Qt.AlignmentFlag.AlignHCenter)
 
-        self._placeholder = QLabel("No nerve images selected.")
+        self._placeholder = QLabel("No images pinned.")
         self._row.addWidget(self._placeholder)
 
     def refresh(self, records: list[ImageRecord]) -> None:
-        """Rebuild the tiles from the given (already top-3) records."""
+        """Rebuild the tiles from the given pinned records (already in display order)."""
         self._records = list(records)
         self._rebuild_tiles()
 
@@ -72,7 +68,7 @@ class Top3Window(QWidget):
     def _rebuild_tiles(self) -> None:
         self._clear()
         if not self._records:
-            self._placeholder = QLabel("No nerve images selected.")
+            self._placeholder = QLabel("No images pinned.")
             self._row.addWidget(self._placeholder)
         else:
             alpha = alpha_from_slider(self._slider.value())
@@ -85,7 +81,7 @@ class Top3Window(QWidget):
 
         The layout minimum is derived from the real widgets (each tile image's ``_TILE`` minimum, the
         metrics text, the buttons, and the slider) plus spacing and margins, so it stays honest as the
-        top-3 set changes rather than being a stale constant.
+        pinned set changes rather than being a stale constant.
         """
         layout = self.layout()
         if layout is not None:
@@ -123,19 +119,18 @@ class Top3Window(QWidget):
         layout.addWidget(info_label)
 
         buttons = QHBoxLayout()
-        # A pinned image shows "Unpin"; an unpinned one shows "Pin" (checking Pin in the main table).
-        pin_toggle = QPushButton("Unpin" if record.pinned else "Pin")
+        unpin = QPushButton("Unpin")
         dont_use = QPushButton("Don't Use")
 
-        def emit_pin_toggle() -> None:  # `record` is this call's parameter — no late-binding capture
-            (self.unpin_requested if record.pinned else self.pin_requested).emit(record)
+        def emit_unpin() -> None:  # `record` is this call's parameter — no late-binding capture
+            self.unpin_requested.emit(record)
 
         def emit_dont_use() -> None:
             self.dont_use_requested.emit(record)
 
-        pin_toggle.clicked.connect(emit_pin_toggle)
+        unpin.clicked.connect(emit_unpin)
         dont_use.clicked.connect(emit_dont_use)
-        buttons.addWidget(pin_toggle)
+        buttons.addWidget(unpin)
         buttons.addWidget(dont_use)
         layout.addLayout(buttons)
 
