@@ -698,8 +698,7 @@ class MainWindow(QMainWindow):
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         try:
             image = load_image(record.path)
-            record.mask = self.engine.segment(image)
-            record.metrics = self.engine.morphometry(record.mask)
+            record.mask, record.metrics = self.engine.analyze(image)
             return True
         except Exception:
             log.exception("Segmentation failed for %s", record.name)
@@ -911,7 +910,8 @@ class MainWindow(QMainWindow):
         self._redo_button.setEnabled(self._history is not None and self._history.can_redo())
 
     def _keep_edit(self) -> bool:
-        """Commit the working mask in memory: metrics first (so a failure leaves the record intact).
+        """Commit the post-processed working mask in memory: cells below the minimum area are removed
+        and metrics computed first (so a failure leaves the record and the working mask intact).
 
         Returns whether the commit succeeded, so the close guard can abort the exit on a failure.
         """
@@ -920,13 +920,13 @@ class MainWindow(QMainWindow):
         if record is None or working is None:
             return False
         try:
-            metrics = self.engine.morphometry(working)
+            clean, metrics = self.engine.postprocess(working)
         except Exception:
             log.exception("Morphometry failed for %s", record.name)
             self.statusBar().showMessage(f"Morphometry failed for {record.name}; edit left open.")
             return False  # stay in edit mode; the doctor's mask is preserved
         record.metrics = metrics
-        record.mask = working
+        record.mask = clean
         record.is_nerve = True
         self._mark_dirty()
         self._exit_edit()

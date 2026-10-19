@@ -2,9 +2,10 @@
 
 ``process_directory`` runs the per-directory pipeline that ``MainWindow`` used to inline: it
 processes the accepted image files in chunks, decoding/preprocessing in parallel and running
-classification and segmentation in batches, then computes morphometry per nerve. It is Qt-free and
-takes its model access through an ``Engine`` protocol and its decode through a ``load`` callable, so
-the failure-attribution contract is unit-testable with stubs (no ``QApplication``, no checkpoints).
+classification and segmentation in batches, then post-processes each nerve's mask (removing cells
+below the minimum area and computing morphometry, in parallel). It is Qt-free and takes its model
+access through an ``Engine`` protocol and its decode through a ``load`` callable, so the
+failure-attribution contract is unit-testable with stubs (no ``QApplication``, no checkpoints).
 
 Failure attribution mirrors the old serial ``MainWindow._process_file`` exactly:
 
@@ -66,7 +67,7 @@ class Engine(Protocol):
     def segment_batch(self, images: Sequence[np.ndarray], executor: Executor | None = ...) -> list[np.ndarray]: ...
     def classify(self, image: np.ndarray) -> bool: ...
     def segment(self, image: np.ndarray) -> np.ndarray: ...
-    def morphometry(self, mask: np.ndarray) -> dict[str, float]: ...
+    def postprocess(self, mask: np.ndarray) -> tuple[np.ndarray, dict[str, float]]: ...
 
 
 def _safe_load(path: Path, load: Callable[[Path], np.ndarray]) -> tuple[Path, np.ndarray | None]:
@@ -145,15 +146,15 @@ def _segment_masks(
     return masks
 
 
-def _safe_morphometry(engine: Engine, job: tuple[np.ndarray, str]) -> dict[str, float] | None:
-    """Measure one ``(mask, name)`` job, returning ``None`` (and logging) on failure.
+def _safe_postprocess(engine: Engine, job: tuple[np.ndarray, str]) -> tuple[np.ndarray, dict[str, float]] | None:
+    """Post-process one ``(mask, name)`` job to ``(clean_mask, metrics)``; ``None`` (logged) on failure.
 
     Runs in a worker thread; takes the mask and name as one tuple so it maps cleanly over an
     ``Executor.map`` of jobs.
     """
     mask, name = job
     try:
-        return engine.morphometry(mask)
+        return engine.postprocess(mask)
     except Exception:
         log.exception("Segmentation failed for %s; leaving unchecked", name)
         return None
@@ -227,16 +228,17 @@ def process_directory(
                 else:
                     record.mask = mask
 
-            # 4. Parallel morphometry over the successfully-segmented masks; failures revert.
+            # 4. Parallel post-processing (small-cell removal + morphometry) over the successfully
+            #    segmented masks: each record keeps the cleaned mask and its metrics; failures revert.
             segmented = [record for record in nerve_records if record.mask is not None]
             if segmented:
                 jobs = [(record.mask, record.name) for record in segmented if record.mask is not None]
-                metrics = executor.map(partial(_safe_morphometry, engine), jobs)
-                for record, result in zip(segmented, metrics, strict=True):
+                results = executor.map(partial(_safe_postprocess, engine), jobs)
+                for record, result in zip(segmented, results, strict=True):
                     if result is None:
                         _revert(record, index_of[record], seg_failed)
                     else:
-                        record.metrics = result
+                        record.mask, record.metrics = result
 
         # 5. Commit the chunk and advance progress (once per chunk, including all-failed chunks).
         records.extend(chunk_records)

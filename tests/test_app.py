@@ -460,7 +460,7 @@ def test_build_config_frozen_redirects_only_model_paths(monkeypatch: pytest.Monk
     base = app_config.CONFIG
     assert frozen.physical_image_size == base.physical_image_size
     assert frozen.sigma == base.sigma
-    assert frozen.min_size == base.min_size
+    assert frozen.min_area == base.min_area
     assert frozen.batch_size == base.batch_size
     assert frozen.num_workers == base.num_workers
     assert frozen.accepted_extensions == base.accepted_extensions

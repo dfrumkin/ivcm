@@ -1,19 +1,20 @@
 """Model loading and inference for the clinical-review UI (Qt-free).
 
 ``InferenceEngine`` loads both trained models in its constructor (not at import) and runs
-classification, segmentation, and morphometry. The class-index and mask logic are split into
-small pure helpers (taking ready-made logits) so they are unit-testable without a checkpoint.
-All forward passes run under ``torch.inference_mode()``.
+classification, segmentation, and mask post-processing (small-cell removal + morphometry;
+``analyze`` chains segmentation and post-processing for one image). The class-index and mask
+logic are split into small pure helpers (taking ready-made logits) so they are unit-testable
+without a checkpoint. All forward passes run under ``torch.inference_mode()``.
 
-Two flavours of inference coexist. The single-image ``classify`` / ``segment`` methods serve the
-interactive checkbox path (and the per-file fallback used by the directory batch). The batched
-``classify_batch`` / ``segment_batch`` methods serve the directory batch (``ivcm.app.batch``).
-Classification stacks a list of images (optionally preprocessed in parallel via a passed
-executor) into one tensor and runs the forward in device sub-batches, amortising per-launch
-overhead. Segmentation runs at each image's native resolution via sliding-window inference, so
-its batch path cannot stack differently-sized images — it runs each image individually (windows
-are batched internally by ``sw_batch_size``); decode/preprocess is still parallelised via the
-executor.
+Two flavours of inference coexist. The single-image ``analyze`` method serves the interactive
+checkbox path, and ``classify`` / ``segment`` serve the per-file fallback used by the directory
+batch. The batched ``classify_batch`` / ``segment_batch`` methods serve the directory batch
+(``ivcm.app.batch``), which then calls ``postprocess`` per mask. Classification stacks a list of
+images (optionally preprocessed in parallel via a passed executor) into one tensor and runs the
+forward in device sub-batches, amortising per-launch overhead. Segmentation runs at each image's
+native resolution via sliding-window inference, so its batch path cannot stack differently-sized
+images — it runs each image individually (windows are batched internally by ``sw_batch_size``);
+decode/preprocess is still parallelised via the executor.
 """
 
 from __future__ import annotations
@@ -34,7 +35,7 @@ from torch import nn
 from ivcm.app.config import AppConfig, ModelConfig
 from ivcm.data import build_eval_transform, build_seg_eval_transform, ensure_square
 from ivcm.models.segmentation import SegmentationModule, sliding_window_logits
-from ivcm.morphometry import cell_morphometry
+from ivcm.morphometry import postprocess_mask
 from ivcm.utils import select_device
 
 
@@ -207,7 +208,7 @@ def _load_model(cfg: DictConfig, ckpt_path: Path, device: torch.device) -> nn.Mo
 
 
 class InferenceEngine:
-    """Loads both models once and runs classification / segmentation / morphometry."""
+    """Loads both models once and runs classification / segmentation / post-processing."""
 
     def __init__(self, config: AppConfig) -> None:
         self.config = config
@@ -296,12 +297,19 @@ class InferenceEngine:
             tensors = executor.map(_transform_seg_image, images)
         return [self._segment_tensor(t.unsqueeze(0).to(self.device)) for t in tensors]
 
-    def morphometry(self, mask: np.ndarray) -> dict[str, float]:
-        """Count / density / average area / average perimeter for a mask, in physical units from
-        the configured parameters."""
-        return cell_morphometry(
+    def postprocess(self, mask: np.ndarray) -> tuple[np.ndarray, dict[str, float]]:
+        """Remove cells below the configured ``min_area`` from ``mask`` and measure the rest.
+
+        Returns the cleaned mask and its count / density / average area / average perimeter, in
+        physical units from the configured parameters. ``mask`` itself is not modified.
+        """
+        return postprocess_mask(
             mask,
             sigma=self.config.sigma,
             physical_image_size=self.config.physical_image_size,
-            min_size=self.config.min_size,
+            min_area=self.config.min_area,
         )
+
+    def analyze(self, image: np.ndarray) -> tuple[np.ndarray, dict[str, float]]:
+        """Segment ``image`` and post-process the mask: the cleaned mask and its metrics."""
+        return self.postprocess(self.segment(image))

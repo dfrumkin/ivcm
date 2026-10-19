@@ -22,7 +22,8 @@ class ImageRecord:
     checkbox: a pinned row is always used (``pinned`` implies ``is_nerve``) and sorts to the very
     top; at most :data:`MAX_PINNED` rows may be pinned. ``mask`` and ``metrics`` are filled lazily
     by segmentation and cached, so they persist even after the row is unchecked (the overlay still
-    shows in the preview/large view). ``metrics`` holds the ``cell_morphometry`` output
+    shows in the preview/large view). ``mask`` is the post-processed mask (cells below the minimum
+    area removed) and ``metrics`` its ``postprocess_mask`` measures
     (``{"count", "density", "area", "perimeter"}``) once computed.
     """
 

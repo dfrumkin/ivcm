@@ -62,16 +62,18 @@ class AppConfig:
     classification: ModelConfig
     segmentation: ModelConfig
 
-    # Morphometry parameters forwarded to ``ivcm.morphometry.cell_morphometry``.
+    # Morphometry parameters forwarded to ``ivcm.morphometry.postprocess_mask``.
     # ``physical_image_size`` is the physical side length of the (square) input image in µm
     # (default 400 -- the HRT / Rostock Cornea Module field): density is reported as cells/mm²
     # (``count / (physical_image_size / 1000)**2``), area in µm² and perimeter in µm -- both
     # per-cell averages (the raw pixel measurements scaled by ``physical_image_size / resolution``,
     # squared for area, then divided by the cell count). It is unrelated to the pixel-space
-    # ``image_size`` in the training/model config.
+    # ``image_size`` in the training/model config. ``min_area`` is the minimum cell area in µm²:
+    # every predicted (or edited) mask is post-processed to remove 8-connected components whose
+    # pixel area is strictly below it, so the mask shown/saved and its metrics agree.
     sigma: float = 1.0
     physical_image_size: float = 400.0
-    min_size: int = 3
+    min_area: float = 9.0
 
     # Overlay appearance: RGB mask colour and blend alpha in [0, 1].
     mask_color: tuple[int, int, int] = (255, 0, 0)
@@ -93,6 +95,8 @@ class AppConfig:
             raise ValueError(f"num_workers must be >= 1; got {self.num_workers}.")
         if self.physical_image_size <= 0:
             raise ValueError(f"physical_image_size must be > 0; got {self.physical_image_size}.")
+        if self.min_area < 0:
+            raise ValueError(f"min_area must be >= 0; got {self.min_area}.")
 
 
 # Edit these to this machine's trained runs. Both ``run_dir`` values must contain

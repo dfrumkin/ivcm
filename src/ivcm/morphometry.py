@@ -6,7 +6,7 @@ field of the Heidelberg HRT / Rostock Cornea Module used to acquire these IVCM i
 ``S = physical_image_size`` (µm) and the pixel resolution ``R = mask.shape[0]`` (masks are square,
 so ``R == mask.shape[1]``) giving a per-pixel scale ``scale = S / R`` (µm/pixel):
 
-- **count** — DCs per image (surviving 8-connected components, after ``min_size`` filtering);
+- **count** — DCs per image (surviving 8-connected components, after ``min_area`` filtering);
 - **density** — ``count / (S / 1000)**2`` = **DCs per mm²** (the count times a constant, as
   the source protocol defines it; ``S / 1000`` is the side length in mm);
 - **area** — average DC surface per image, ``raw_px2 * scale**2 / count`` (**µm²**);
@@ -28,6 +28,13 @@ measure that polygon (Euclidean edge lengths for perimeter, shoelace for area). 
 the smoothing/bias trade-off: a larger ``sigma`` rounds corners harder and can shrink or erase
 small cells and thin dendritic branches; the default is deliberately small. ``scale`` then converts
 those raw pixel measurements to physical units.
+
+**Minimum cell area.** An 8-connected component whose pixel area (``pixel_count * scale**2``, µm²)
+is strictly less than ``min_area`` (default ``9.0`` µm²) is not a cell: it is dropped before any
+measure is taken. The decision uses the pixel area (not the smoothed-contour area) so it is exact
+and independent of ``sigma``. ``postprocess_mask`` applies the same filter to the mask itself and
+returns the cleaned mask with its measures from one labelling, so the mask shown/saved and its
+metrics always agree.
 
 Functions operate on a single 2D **square** mask; a caller measuring a volume loops over slices.
 """
@@ -59,7 +66,7 @@ _CONNECTIVITY = 2
 _UM_PER_MM = 1000.0
 
 
-def _validate(mask: np.ndarray, *, sigma: float | None, physical_image_size: float, min_size: int) -> None:
+def _validate(mask: np.ndarray, *, sigma: float | None, physical_image_size: float, min_area: float) -> None:
     """Reject inputs the measures are not defined for, with a clear message.
 
     ``sigma`` is only supplied by the smoothing-based measures (area/perimeter); ``None`` skips
@@ -72,24 +79,27 @@ def _validate(mask: np.ndarray, *, sigma: float | None, physical_image_size: flo
         raise ValueError(f"mask must be square (H == W); got shape {mask.shape}.")
     if physical_image_size <= 0:
         raise ValueError(f"physical_image_size must be > 0; got {physical_image_size}.")
-    if min_size < 0:
-        raise ValueError(f"min_size must be >= 0; got {min_size}.")
+    if min_area < 0:
+        raise ValueError(f"min_area must be >= 0; got {min_area}.")
     if sigma is not None and sigma < 0:
         raise ValueError(f"sigma must be >= 0; got {sigma}.")
 
 
-def _label_components(mask: np.ndarray, min_size: int) -> tuple[np.ndarray, int]:
-    """Binarise, 8-connected-label, and drop components smaller than ``min_size`` pixels.
+def _label_components(mask: np.ndarray, min_area: float, physical_image_size: float) -> tuple[np.ndarray, int]:
+    """Binarise, 8-connected-label, and drop components whose pixel area is below ``min_area`` µm².
 
-    Returns the (relabelled-by-removal) label image and the surviving component count. Filtering
-    on the labelled image keeps density and area/perimeter on exactly the same component set.
+    A component's pixel area is its pixel count times ``scale**2`` (``scale`` µm/pixel, from
+    ``physical_image_size`` and the square mask's side length). Returns the (relabelled-by-removal)
+    label image and the surviving component count. Filtering on the labelled image keeps density
+    and area/perimeter on exactly the same component set.
     """
     binary = mask != 0
     labels = cast(np.ndarray, label(binary, connectivity=_CONNECTIVITY))
     n = int(labels.max())
-    if min_size > 0 and n > 0:
+    if min_area > 0 and n > 0:
+        scale = physical_image_size / mask.shape[0]
         sizes = np.bincount(labels.ravel())
-        too_small = np.flatnonzero(sizes < min_size)
+        too_small = np.flatnonzero(sizes * scale**2 < min_area)
         too_small = too_small[too_small != 0]  # never drop background (label 0)
         if too_small.size:
             labels = labels.copy()
@@ -154,34 +164,36 @@ def _area_perimeter(labels: np.ndarray, sigma: float) -> tuple[float, float]:
     return area, perimeter
 
 
-def cell_density(mask: np.ndarray, *, physical_image_size: float = 400.0, min_size: int = 3) -> float:
-    """DC count (8-connected components, after ``min_size`` filtering) per mm².
+def cell_density(mask: np.ndarray, *, physical_image_size: float = 400.0, min_area: float = 9.0) -> float:
+    """DC count (8-connected components, after ``min_area`` filtering) per mm².
 
     ``count / (physical_image_size / 1000)**2`` -- components per mm², using the square image's
     physical side length (``physical_image_size`` in µm; ``/1000`` converts it to mm). Independent
     of the pixel resolution.
     """
-    _validate(mask, sigma=None, physical_image_size=physical_image_size, min_size=min_size)
-    _, count = _label_components(mask, min_size)
+    _validate(mask, sigma=None, physical_image_size=physical_image_size, min_area=min_area)
+    _, count = _label_components(mask, min_area, physical_image_size)
     return count / (physical_image_size / _UM_PER_MM) ** 2
 
 
-def cell_area(mask: np.ndarray, *, sigma: float = 1.0, physical_image_size: float = 400.0, min_size: int = 3) -> float:
+def cell_area(
+    mask: np.ndarray, *, sigma: float = 1.0, physical_image_size: float = 400.0, min_area: float = 9.0
+) -> float:
     """Total DC surface area in µm² from the smoothed per-component contours.
 
     The raw pixel area is scaled by ``(physical_image_size / R)**2`` (``R`` the square mask's side
     length; ``physical_image_size`` in µm). ``sigma`` controls the smoothing/bias trade-off (see the
     module docstring); ``sigma=0`` measures the raw 0.5 contour with no smoothing.
     """
-    _validate(mask, sigma=sigma, physical_image_size=physical_image_size, min_size=min_size)
-    labels, _ = _label_components(mask, min_size)
+    _validate(mask, sigma=sigma, physical_image_size=physical_image_size, min_area=min_area)
+    labels, _ = _label_components(mask, min_area, physical_image_size)
     area, _ = _area_perimeter(labels, sigma)
     scale = physical_image_size / mask.shape[0]
     return area * scale**2
 
 
 def cell_perimeter(
-    mask: np.ndarray, *, sigma: float = 1.0, physical_image_size: float = 400.0, min_size: int = 3
+    mask: np.ndarray, *, sigma: float = 1.0, physical_image_size: float = 400.0, min_area: float = 9.0
 ) -> float:
     """Total DC outline length in µm from the smoothed per-component contours.
 
@@ -189,32 +201,43 @@ def cell_perimeter(
     length; ``physical_image_size`` in µm). ``sigma`` controls the smoothing/bias trade-off (see the
     module docstring); ``sigma=0`` measures the raw 0.5 contour with no smoothing.
     """
-    _validate(mask, sigma=sigma, physical_image_size=physical_image_size, min_size=min_size)
-    labels, _ = _label_components(mask, min_size)
+    _validate(mask, sigma=sigma, physical_image_size=physical_image_size, min_area=min_area)
+    labels, _ = _label_components(mask, min_area, physical_image_size)
     _, perimeter = _area_perimeter(labels, sigma)
     scale = physical_image_size / mask.shape[0]
     return perimeter * scale
 
 
-def cell_morphometry(
-    mask: np.ndarray, *, sigma: float = 1.0, physical_image_size: float = 400.0, min_size: int = 3
-) -> dict[str, float]:
-    """All four measures at once: ``{"count", "density", "area", "perimeter"}`` (cells, cells/mm²,
-    µm², µm; area/perimeter are per-cell averages, not per-image totals).
+def postprocess_mask(
+    mask: np.ndarray, *, sigma: float = 1.0, physical_image_size: float = 400.0, min_area: float = 9.0
+) -> tuple[np.ndarray, dict[str, float]]:
+    """Remove components below ``min_area`` µm² from ``mask`` and measure what remains.
 
-    The intended single entry point at inference: cleans/labels the mask once and extracts the
-    smoothed contours once for area and perimeter, avoiding redundant work. Density is
+    The intended single entry point at inference: labels the mask once, and from the surviving
+    components returns both the cleaned mask (same shape and dtype as ``mask``, removed components
+    zeroed; ``mask`` itself is never modified) and the four measures ``{"count", "density", "area",
+    "perimeter"}`` (cells, cells/mm², µm², µm; area/perimeter are per-cell averages, not per-image
+    totals). The smoothed contours are extracted once for area and perimeter. Density is
     ``count / (physical_image_size / 1000)**2``; area/perimeter scale the raw pixel measurements by
     ``scale**2`` / ``scale`` where ``scale = physical_image_size / R`` (see the module docstring),
     then divide by ``count`` (``0.0`` when ``count`` is ``0``, rather than dividing by zero).
     """
-    _validate(mask, sigma=sigma, physical_image_size=physical_image_size, min_size=min_size)
-    labels, count = _label_components(mask, min_size)
+    _validate(mask, sigma=sigma, physical_image_size=physical_image_size, min_area=min_area)
+    labels, count = _label_components(mask, min_area, physical_image_size)
     area, perimeter = _area_perimeter(labels, sigma)
     scale = physical_image_size / mask.shape[0]
-    return {
+    clean = np.where(labels != 0, mask, 0).astype(mask.dtype)
+    return clean, {
         "count": float(count),
         "density": count / (physical_image_size / _UM_PER_MM) ** 2,
         "area": area * scale**2 / count if count else 0.0,
         "perimeter": perimeter * scale / count if count else 0.0,
     }
+
+
+def cell_morphometry(
+    mask: np.ndarray, *, sigma: float = 1.0, physical_image_size: float = 400.0, min_area: float = 9.0
+) -> dict[str, float]:
+    """The four measures of ``postprocess_mask`` alone (the cleaned mask is discarded)."""
+    _, metrics = postprocess_mask(mask, sigma=sigma, physical_image_size=physical_image_size, min_area=min_area)
+    return metrics

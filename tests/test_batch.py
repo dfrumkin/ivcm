@@ -135,8 +135,12 @@ def test_segment_batch_handles_mixed_native_sizes() -> None:
 _OK = 1  # nerve, segments and measures fine
 _PLAIN = 0  # not a nerve
 _SEG_FAIL = 2  # nerve; single-image segment raises (only reachable via segment_batch fallback)
-_MORPH_FAIL = 3  # nerve; morphometry raises
+_MORPH_FAIL = 3  # nerve; post-processing (morphometry) raises
 _CLS_FAIL = 4  # single-image classify raises (only reachable via classify_batch fallback)
+
+# What the stub's post-processing returns as the cleaned mask: distinct from every raw segmented
+# mask (``np.full((1, 1), code)``), so a test can tell which one a record stored.
+_CLEAN_MASK = np.full((1, 1), 99, dtype=np.uint8)
 
 _CODES = {"plain": _PLAIN, "ok": _OK, "segfail": _SEG_FAIL, "morphfail": _MORPH_FAIL, "clsfail": _CLS_FAIL}
 
@@ -182,10 +186,10 @@ class _FakeEngine:
             raise RuntimeError("batched segment OOM")
         return [self.segment(image) for image in images]
 
-    def morphometry(self, mask: np.ndarray) -> dict[str, float]:
+    def postprocess(self, mask: np.ndarray) -> tuple[np.ndarray, dict[str, float]]:
         if _code(mask) == _MORPH_FAIL:
-            raise RuntimeError("morphometry failed")
-        return {"count": 1.0, "density": 1.0, "area": 2.0, "perimeter": 3.0}
+            raise RuntimeError("post-processing failed")
+        return _CLEAN_MASK.copy(), {"count": 1.0, "density": 1.0, "area": 2.0, "perimeter": 3.0}
 
 
 def _run(
@@ -212,9 +216,11 @@ def test_process_directory_happy_path_classifies_segments_and_measures() -> None
     assert skipped == [] and seg_failed == []
     nerve = [r for r in records if r.is_nerve]
     assert [r.name for r in nerve] == ["0_ok.tif", "2_ok.tif"]
-    assert all(
-        r.mask is not None and r.metrics == {"count": 1.0, "density": 1.0, "area": 2.0, "perimeter": 3.0} for r in nerve
-    )
+    # Each nerve record stores the post-processed (cleaned) mask, not the raw segmented one.
+    for r in nerve:
+        assert r.mask is not None
+        np.testing.assert_array_equal(r.mask, _CLEAN_MASK)
+        assert r.metrics == {"count": 1.0, "density": 1.0, "area": 2.0, "perimeter": 3.0}
     plain = next(r for r in records if r.name == "1_plain.tif")
     assert plain.is_nerve is False and plain.mask is None and plain.metrics is None
     assert progress[-1] == len(files)
@@ -329,6 +335,11 @@ def test_app_config_rejects_non_positive_batch_or_workers(batch_size: int, num_w
             batch_size=batch_size,
             num_workers=num_workers,
         )
+
+
+def test_app_config_rejects_negative_min_area() -> None:
+    with pytest.raises(ValueError):
+        AppConfig(classification=_model_config(), segmentation=_model_config(), min_area=-1.0)
 
 
 @pytest.mark.parametrize("physical_image_size", [0.0, -1.0])

@@ -10,7 +10,7 @@ import math
 import numpy as np
 import pytest
 
-from ivcm.morphometry import cell_area, cell_density, cell_morphometry, cell_perimeter
+from ivcm.morphometry import cell_area, cell_density, cell_morphometry, cell_perimeter, postprocess_mask
 
 
 def _close(actual: float, expected: float, rel: float = 0.02) -> bool:
@@ -73,18 +73,18 @@ def test_square_area_and_perimeter() -> None:
     assert _close(cell_perimeter(mask, sigma=1.0, physical_image_size=60), 4 * side, 0.05)
 
 
-def test_density_is_count_over_physical_area_and_min_size_filters() -> None:
-    """Density is ``count / (physical_image_size / 1000)**2`` (cells/mm², µm side length); the new
-    default ``min_size=3`` filters a 1-pixel speck that ``min_size=0`` keeps."""
+def test_density_is_count_over_physical_area_and_min_area_filters() -> None:
+    """Density is ``count / (physical_image_size / 1000)**2`` (cells/mm², µm side length); the
+    default ``min_area=9.0`` µm² filters a 1-µm² speck that ``min_area=0`` keeps."""
     mask = np.zeros((100, 100), dtype=np.uint8)
     mask[_disk(100, 8, 25, 25) > 0] = 1
     mask[_disk(100, 8, 25, 75) > 0] = 1
     mask[_disk(100, 8, 75, 50) > 0] = 1
-    mask[90, 90] = 1  # a 1-pixel speck (size 1)
+    mask[90, 90] = 1  # a 1-pixel speck: 1 µm² at scale 1 (physical_image_size == mask side)
 
-    # Without filtering the speck counts (4 components); the default min_size=3 drops it (3).
-    assert cell_density(mask, min_size=0, physical_image_size=2000.0) == 4 / (2000.0 / 1000) ** 2
-    assert cell_density(mask, physical_image_size=2000.0) == 3 / (2000.0 / 1000) ** 2  # default min_size=3
+    # Without filtering the speck counts (4 components); the default min_area=9.0 drops it (3).
+    assert cell_density(mask, min_area=0, physical_image_size=100.0) == 4 / (100.0 / 1000) ** 2
+    assert cell_density(mask, physical_image_size=100.0) == 3 / (100.0 / 1000) ** 2  # default min_area=9.0
 
 
 def test_physical_scaling_matches_scale_one_baseline() -> None:
@@ -95,9 +95,10 @@ def test_physical_scaling_matches_scale_one_baseline() -> None:
     resolution = mask.shape[0]  # R
 
     # scale == 1: area/perimeter are the raw pixel measurements; density is count / (R/1000)**2.
-    baseline = cell_morphometry(mask, sigma=1.0, physical_image_size=resolution)
+    # ``min_area=0``: the tiny 2.5 µm field would otherwise put the whole disk below the threshold.
+    baseline = cell_morphometry(mask, sigma=1.0, physical_image_size=resolution, min_area=0)
     size = 2.5
-    scaled = cell_morphometry(mask, sigma=1.0, physical_image_size=size)
+    scaled = cell_morphometry(mask, sigma=1.0, physical_image_size=size, min_area=0)
     scale = size / resolution
 
     assert scaled["count"] == baseline["count"] == 1.0
@@ -107,15 +108,15 @@ def test_physical_scaling_matches_scale_one_baseline() -> None:
     assert _close(scaled["perimeter"], baseline["perimeter"] * scale, 1e-9)
 
 
-def test_min_size_applied_consistently_across_metrics() -> None:
-    """A speck below min_size is excluded from density *and* contributes no area/perimeter, so all
+def test_min_area_applied_consistently_across_metrics() -> None:
+    """A speck below min_area is excluded from density *and* contributes no area/perimeter, so all
     four measures stay on the same component set."""
     big = _disk(120, 30, 60, 60)
     mask = big.copy()
-    mask[5, 5] = 1  # tiny speck
+    mask[5, 5] = 1  # tiny speck: one pixel, (400 / 120)**2 ≈ 11.1 µm²
 
     big_only = cell_morphometry(big, sigma=1.0)
-    with_speck = cell_morphometry(mask, sigma=1.0, min_size=5)
+    with_speck = cell_morphometry(mask, sigma=1.0, min_area=20.0)
 
     # The surviving big component is processed identically with or without the (removed) speck, so
     # the measures are exactly equal, not merely close. Density is count / (physical_image_size/1000)**2
@@ -193,4 +194,41 @@ def test_invalid_inputs_raise() -> None:
     with pytest.raises(ValueError):
         cell_area(np.zeros((4, 4), dtype=np.uint8), sigma=-1.0)
     with pytest.raises(ValueError):
-        cell_density(np.zeros((4, 4), dtype=np.uint8), min_size=-1)
+        cell_density(np.zeros((4, 4), dtype=np.uint8), min_area=-1.0)
+    with pytest.raises(ValueError):
+        postprocess_mask(np.zeros((4, 4), dtype=np.uint8), min_area=-1.0)
+
+
+def test_postprocess_mask_removes_cells_below_min_area() -> None:
+    """Components strictly below ``min_area`` µm² are removed from the returned mask; one exactly at
+    the threshold and a large cell are kept unchanged; the input is not modified; and the metrics
+    are those of the cleaned mask (all on the same component set)."""
+    mask = np.zeros((60, 60), dtype=np.uint8)
+    mask[_disk(60, 12, 30, 40) > 0] = 1  # a large cell
+    mask[2:5, 2:5] = 1  # 3x3 = 9 px = 9 µm² at scale 1: exactly the threshold, kept
+    mask[50:52, 2:6] = 1  # 2x4 = 8 px = 8 µm²: below the threshold, removed
+    original = mask.copy()
+
+    clean, metrics = postprocess_mask(mask, physical_image_size=60.0, min_area=9.0)
+
+    expected = original.copy()
+    expected[50:52, 2:6] = 0
+    np.testing.assert_array_equal(clean, expected)
+    assert clean.dtype == mask.dtype
+    np.testing.assert_array_equal(mask, original)  # input untouched
+    assert metrics["count"] == 2.0
+    assert metrics == cell_morphometry(clean, physical_image_size=60.0, min_area=9.0)
+
+
+def test_postprocess_mask_threshold_is_physical_not_pixel() -> None:
+    """The same 9-pixel component is kept at scale 1 (9 µm²) but removed at scale 0.9 (≈7.3 µm²)."""
+    mask = np.zeros((60, 60), dtype=np.uint8)
+    mask[10:13, 10:13] = 1
+
+    kept, kept_metrics = postprocess_mask(mask, physical_image_size=60.0, min_area=9.0)
+    removed, removed_metrics = postprocess_mask(mask, physical_image_size=54.0, min_area=9.0)
+
+    np.testing.assert_array_equal(kept, mask)
+    assert kept_metrics["count"] == 1.0
+    assert not removed.any()
+    assert removed_metrics == {"count": 0.0, "density": 0.0, "area": 0.0, "perimeter": 0.0}

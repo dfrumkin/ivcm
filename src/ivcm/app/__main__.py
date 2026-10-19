@@ -64,7 +64,7 @@ def _app_icon() -> QIcon:
 
 
 def _self_check_inference(engine: InferenceEngine) -> None:
-    """Round-trip one synthetic image through ``load_image`` -> classify -> segment -> morphometry.
+    """Round-trip one synthetic image through ``load_image`` -> classify -> analyze.
 
     The image is written to a temp file and read back via the app's own ``load_image`` so PIL file
     decode (and its bundled image plugins) are exercised too, not just in-memory arrays. Its size is
@@ -81,8 +81,7 @@ def _self_check_inference(engine: InferenceEngine) -> None:
         Image.fromarray(array).save(path)
         image = load_image(path)
         engine.classify(image)
-        mask = engine.segment(image)
-        engine.morphometry(mask)
+        engine.analyze(image)
 
 
 def _run_self_check() -> int:
