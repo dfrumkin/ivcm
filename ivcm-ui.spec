@@ -1,11 +1,9 @@
 # PyInstaller spec for the `ivcm-ui` Windows deliverable (one-folder, no console).
 #
-# Built by .github/workflows/build-windows.yml. The workflow first unpacks the models release asset
+# Used by .github/workflows/build-windows.yml. The workflow first unpacks the models release asset
 # into `<repo>/models/{cls,seg}` (each holding `best-weights.ckpt` + `.hydra/config.yaml`); this
 # spec bundles those under `models/cls` and `models/seg` so the frozen app (see
 # `ivcm.app.config.build_config`) finds them via `sys._MEIPASS`.
-#
-# See plans/current.md, decisions 3/3a/5.
 
 from pathlib import Path
 

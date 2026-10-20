@@ -85,7 +85,7 @@ def _self_check_inference(engine: InferenceEngine) -> None:
 
 
 def _run_self_check() -> int:
-    """Headless smoke check of the full startup + first-use path (see ``plans/current.md`` 3a)."""
+    """Headless smoke check of the full startup + first-use path."""
     try:
         app = QApplication(sys.argv)
         app.setWindowIcon(_app_icon())
